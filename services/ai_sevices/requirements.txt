@@ -71,7 +71,3 @@ semgrep==1.60.0
 tree-sitter==0.23.2
 tree-sitter-language-pack==0.7.2
 
-# Kubernetes sandbox backend (app/services/sandbox/k8s_executor.py) — only
-# imported/used when SANDBOX_BACKEND=kubernetes; the sync client is fine
-# here since every call site already dispatches it via asyncio.to_thread.
-kubernetes==31.0.0

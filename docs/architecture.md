@@ -125,30 +125,22 @@ Third verification signal at fix time (alongside the deterministic rescan
 and the AI review pass): the patched file is actually compiled/executed,
 and the result is handed back as an independent signal. Two interchangeable
 backends live behind one interface (`app/services/sandbox/execute_patch`,
-selected by `SANDBOX_BACKEND`):
+and the result is handed back as an independent signal.
 
 ```
 routers/scanner.py::generate_and_verify_fix
         │
         ▼
-app/services/sandbox/__init__.py::execute_patch()   (SANDBOX_BACKEND)
+app/services/sandbox/__init__.py::execute_patch()
         │
-        ├── "process" (default) ────────────────────────────────┐
-        │   execute.py: fresh tempdir, rlimits, best-effort      │
-        │   unshare --net, non-root subprocess — shares this     │
-        │   service's filesystem namespace (see base.py)          │
-        │                                                         │
-        └── "kubernetes" ────────────────────────────────────────┤
-            k8s_executor.py: ephemeral Job/Pod in the             │
-            patchlinex-sandbox namespace — real filesystem/network │
-            namespace isolation, NetworkPolicy default-deny,      │
-            restricted Pod Security Admission (see k8s/sandbox/)  │
-                                                                   │
-                                                        SandboxExecutionResult
-                                                        (identical shape either way)
+        ▼
+execute.py: fresh tempdir, rlimits, best-effort
+unshare --net, non-root subprocess (see base.py)
+        │
+        ▼
+SandboxExecutionResult
 ```
 
-Both return the same `SandboxExecutionResult` — the verification engine and
-everything upstream of `execute_patch()` never needs to know which backend
-actually ran. See `k8s/sandbox/README.md` for applying the cluster
-resources, building the runner images, and switching backends.
+The verification engine and everything upstream of `execute_patch()` receives
+a standardized `SandboxExecutionResult` detailing phase results, applied security
+controls, stdout/stderr, and exit code.

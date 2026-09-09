@@ -60,8 +60,22 @@ class Settings(BaseSettings):
     azure_openai_deployment_scan: str = ""    # gpt-4.1-mini
     azure_openai_deployment_fix: str = ""     # gpt-5.2
     azure_openai_deployment_verify: str = ""  # codex-5.3
+    azure_openai_embedding_deployment: str = "text-embedding-3-small"
+
+    # ── Embedding Provider (RAG memory & semantic search) ──
+    # Supports: "openrouter" (free embedding models), "mock", "azure_openai"
+    embedding_provider: str = "openrouter"
+    openrouter_embedding_model: str = "liquid/lfm-2.5-embedding-350m:free"
+
+    # ── RAG Memory (Chroma Cloud) ──
+    rag_memory_enabled: bool = False
+    chroma_api_key: str = ""
+    chroma_tenant: str = ""
+    chroma_database: str = ""
+    chroma_collection: str = "finding_memory"
 
     project_name: str = "hackathon-template"
+
 
     # ── Isolated execution sandbox (app/services/sandbox/) ──
     # Third, independent verification signal alongside the deterministic
@@ -77,55 +91,26 @@ class Settings(BaseSettings):
     sandbox_timeout_seconds: int = 20
 
     # ── Sandbox execution backend ──
-    # "process": the in-process subprocess sandbox above (base.py/execute.py)
-    #   — real rlimits, best-effort netns, but shares the host filesystem
-    #   namespace with this service (see base.py's docstring). Zero extra
-    #   infra; the default so a plain `docker compose up` keeps working.
-    # "kubernetes": each execution runs in its own ephemeral, disposable
-    #   Job/Pod in a dedicated namespace (see k8s/sandbox/ and
-    #   k8s_executor.py) — real filesystem and network namespace isolation
-    #   from this service and from every other execution, which is what
-    #   closes the gap base.py's docstring calls out. Requires cluster
-    #   access (in-cluster service account, or SANDBOX_K8S_KUBECONFIG_PATH
-    #   for local/out-of-cluster testing against a kind/minikube cluster)
-    #   and the RBAC/NetworkPolicy/namespace in k8s/sandbox/ applied first.
+    # "process" is the sole supported backend: in-process subprocess sandbox
+    # (execute.py/base.py) with real rlimits, non-root execution, and
+    # best-effort netns isolation. Zero extra infra — a plain
+    # `docker compose up` works out of the box.
+    # Kubernetes execution has been removed; this constant is kept so any
+    # existing .env files that set SANDBOX_BACKEND=process continue to work
+    # without change. Any value other than "process" is silently ignored and
+    # falls back to "process".
     sandbox_backend: str = "process"
-    sandbox_k8s_namespace: str = "patchlinex-sandbox"
-    # The identity the SANDBOX POD itself runs as — deliberately a
-    # zero-permission identity with no RoleBinding at all (see
-    # k8s/sandbox/10-rbac.yaml), separate from whatever identity this
-    # service uses to authenticate its OWN calls to the Kubernetes API
-    # (that's ai_sevices' own in-cluster service account / kubeconfig, not
-    # configured here). k8s_executor.py also sets
-    # automountServiceAccountToken: false on the Pod regardless, so the
-    # untrusted code never gets a live token either way — this is
-    # defense in depth, not the only control.
-    sandbox_k8s_service_account: str = "patchlinex-sandbox-runner"
-    # Set when running this service outside the cluster (local dev against a
-    # kind/minikube cluster). Leave unset in-cluster — the executor falls
-    # back to the Pod's mounted service account token automatically.
-    sandbox_k8s_kubeconfig_path: Optional[str] = None
-    # One image per supported language (see runners.py's LANGUAGE_BY_EXTENSION
-    # / _RUNNERS registry — only python/javascript are wired up today).
-    # Built from k8s/sandbox/docker/<language>/Dockerfile.
-    sandbox_k8s_image_python: str = "ghcr.io/patchlinex/sandbox-python-runner:latest"
-    sandbox_k8s_image_javascript: str = "ghcr.io/patchlinex/sandbox-javascript-runner:latest"
-    # Hard ceiling independent of the per-request cpuSeconds/memoryMb the
-    # caller passes (see routers/sandbox.py's own min/max clamps) — this is
-    # the container's actual resources.limits, so a caller can only ask for
-    # less than this, never more.
-    sandbox_k8s_cpu_limit: str = "1"
-    sandbox_k8s_memory_limit: str = "512Mi"
-    sandbox_k8s_ephemeral_storage_limit: str = "256Mi"
-    # How long to keep polling the Job before giving up and deleting it —
-    # separate from wall_clock_timeout_seconds (that's activeDeadlineSeconds,
-    # enforced by Kubernetes itself); this is a client-side backstop in case
-    # the Job never reaches a terminal phase (e.g. can't schedule).
-    sandbox_k8s_startup_timeout_seconds: int = 45
-    # ttlSecondsAfterFinished — belt-and-suspenders cleanup on top of the
-    # executor's own explicit delete-in-`finally`, in case that delete itself
-    # fails partway (e.g. this service crashes mid-execution).
-    sandbox_k8s_job_ttl_seconds: int = 120
+
+    # ── OpenRouter fallback AI provider ──
+    # OpenRouter exposes an OpenAI-compatible /v1/chat/completions endpoint
+    # that can route to 200+ models. When the primary AI provider (AI_PROVIDER)
+    # returns an HTTP 5xx error or times out, the AI layer automatically
+    # retries the same request through OpenRouter instead of propagating the
+    # failure. Set AI_PROVIDER_FALLBACK=none to disable fallback entirely.
+    openrouter_api_key: str = ""
+    openrouter_model: str = "meta-llama/llama-3.3-70b-instruct:free"   # High capability 100% free model on OpenRouter
+    ai_provider_fallback: str = "openrouter"                           # "openrouter" | "none"
+
 
     # ── Risk quantification defaults ──
     # Fallback business context used when no BusinessService mapping has

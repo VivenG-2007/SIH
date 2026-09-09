@@ -18,7 +18,22 @@ from app.core.db import ensure_indexes
 from app.core.logging import configure_logging, get_logger
 from app.core.rate_limit import limiter
 from app.errors import http_exception_handler, unhandled_exception_handler, validation_exception_handler
-from app.routers import ai, dashboard, files, health, ingestion, notifications, risk, sandbox, scanner, scenario, search, simulation
+from app.routers import (
+    ai,
+    compliance,
+    dashboard,
+    files,
+    health,
+    ingestion,
+    nlquery,
+    notifications,
+    risk,
+    sandbox,
+    scanner,
+    scenario,
+    search,
+    simulation,
+)
 from app.services.reconciliation import run_reconciliation_loop
 
 settings = get_settings()
@@ -138,12 +153,40 @@ app.add_middleware(
 
 
 @app.middleware("http")
-async def add_request_id_state(request: Request, call_next):
-    # asgi_correlation_id already sets the x-request-id response header;
-    # mirror it onto request.state so our error handlers can read it uniformly.
-    request.state.request_id = request.headers.get("x-request-id") or str(uuid.uuid4())
-    response = await call_next(request)
-    return response
+async def log_requests_and_state(request: Request, call_next):
+    import time
+
+    start_time = time.perf_counter()
+    request_id = request.headers.get("x-request-id") or str(uuid.uuid4())
+    request.state.request_id = request_id
+
+    client_ip = request.client.host if request.client else "unknown"
+    method = request.method
+    path = request.url.path
+    query = f"?{request.url.query}" if request.url.query else ""
+    full_path = f"{path}{query}"
+
+    print(f"--> [HTTP IN]  {method} {full_path} (from {client_ip})", flush=True)
+
+    try:
+        response = await call_next(request)
+        duration_ms = round((time.perf_counter() - start_time) * 1000, 2)
+        status = response.status_code
+        status_color = "\033[92m" if status < 400 else ("\033[93m" if status < 500 else "\033[91m")
+        reset_color = "\033[0m"
+        print(
+            f"<-- [HTTP OUT] {method} {full_path} -> {status_color}{status}{reset_color} ({duration_ms}ms)",
+            flush=True,
+        )
+        return response
+    except Exception as exc:
+        duration_ms = round((time.perf_counter() - start_time) * 1000, 2)
+        print(
+            f"<-- [HTTP ERR] {method} {full_path} -> \033[91m500 ERROR\033[0m ({duration_ms}ms): {exc}",
+            flush=True,
+        )
+        raise
+
 
 
 app.include_router(health.router)
@@ -158,4 +201,6 @@ app.include_router(risk.router)
 app.include_router(ingestion.router)
 app.include_router(scenario.router)
 app.include_router(simulation.router)
+app.include_router(compliance.router)
+app.include_router(nlquery.router)
 

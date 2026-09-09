@@ -197,6 +197,7 @@ async def optimize_investment_endpoint(
                 "applicable_asset_ids": o.applicable_asset_ids,
                 "implementation_time_days": o.implementation_time_days,
                 "roi": o.roi,
+                "rosi": o.rosi,
             }
             for o in result.selected
         ],
@@ -206,6 +207,7 @@ async def optimize_investment_endpoint(
         ],
         "total_cost_usd": result.total_cost_usd,
         "total_risk_reduction_usd": result.total_risk_reduction_usd,
+        "portfolio_rosi": result.portfolio_rosi,
         "budget_usd": result.budget_usd,
         "budget_utilization_pct": result.budget_utilization_pct,
         "unevidenced_candidate_count": sum(

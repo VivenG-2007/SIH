@@ -47,14 +47,20 @@ async def _run_phase(name: str, cmd: list[str], cwd: str, limits: SandboxLimits)
     net_prefix, net_method = network_isolation_prefix()
     full_cmd = [*net_prefix, *cmd]
 
+    exec_kwargs = {
+        "cwd": cwd,
+        "stdout": asyncio.subprocess.PIPE,
+        "stderr": asyncio.subprocess.PIPE,
+    }
+    if preexec_fn is not None and os.name != "nt":
+        exec_kwargs["preexec_fn"] = preexec_fn
+
     try:
         proc = await asyncio.create_subprocess_exec(
             *full_cmd,
-            cwd=cwd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            preexec_fn=preexec_fn,
+            **exec_kwargs,
         )
+
     except FileNotFoundError as exc:
         return PhaseResult(
             name=name, cmd=cmd, exit_code=None, stdout="", stderr=str(exc),

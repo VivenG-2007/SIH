@@ -99,16 +99,60 @@ async def _azure_openai_embed(text: str) -> list[float]:
 
 
 
+async def _openrouter_embed(text: str) -> list[float]:
+    """Generates embeddings via OpenRouter's OpenAI-compatible /v1/embeddings endpoint.
+    Supports 100% free embedding models such as 'liquid/lfm-2.5-embedding-350m:free'
+    and 'nvidia/llama-nemotron-embed-vl-1b-v2:free'.
+    """
+    settings = get_settings()
+    api_key = settings.openrouter_api_key or settings.ai_api_key
+    model = settings.openrouter_embedding_model or "liquid/lfm-2.5-embedding-350m:free"
+
+    if not api_key:
+        raise HTTPException(
+            status_code=500,
+            detail="OPENROUTER_API_KEY must be set in .env to use EMBEDDING_PROVIDER=openrouter",
+        )
+
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+        "HTTP-Referer": "https://patchlinex.io",
+        "X-Title": "PatchlineX AI Security Platform",
+    }
+    payload = {
+        "model": model,
+        "input": text,
+    }
+
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        resp = await client.post(
+            "https://openrouter.ai/api/v1/embeddings",
+            headers=headers,
+            json=payload,
+        )
+        if resp.status_code >= 400:
+            raise HTTPException(
+                status_code=502,
+                detail=f"OpenRouter Embeddings error ({resp.status_code}): {resp.text}",
+            )
+        data = resp.json()
+    return data["data"][0]["embedding"]
+
+
 async def embed(text: str) -> list[float]:
     """Returns an embedding vector for `text`. Provider selected by
-    EMBEDDING_PROVIDER (defaults to "mock" — see module docstring)."""
+    EMBEDDING_PROVIDER (options: 'openrouter', 'mock', 'azure_openai')."""
     settings = get_settings()
-    provider = settings.embedding_provider
+    provider = (settings.embedding_provider or "openrouter").lower().strip()
+    if provider == "openrouter":
+        return await _openrouter_embed(text)
     if provider == "azure_openai":
         return await _azure_openai_embed(text)
     if provider == "mock":
         return _mock_embed(text)
-    raise ValueError(f"Unknown EMBEDDING_PROVIDER '{provider}'. Supported: mock, azure_openai")
+    raise ValueError(f"Unknown EMBEDDING_PROVIDER '{provider}'. Supported: openrouter, mock, azure_openai")
+
 
 
 def cosine_similarity(a: list[float], b: list[float]) -> float:

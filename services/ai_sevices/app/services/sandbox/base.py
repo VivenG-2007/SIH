@@ -35,10 +35,15 @@ from __future__ import annotations
 
 import dataclasses
 import os
-import resource
 import shutil
 import subprocess
 from typing import Optional
+
+try:
+    import resource
+except ImportError:
+    resource = None
+
 
 
 @dataclasses.dataclass
@@ -129,14 +134,10 @@ def _nobody_uid_gid() -> Optional[tuple[int, int]]:
 def build_preexec_fn(limits: SandboxLimits, enforce_memory_limit: bool = True):
     """Returns a preexec_fn that drops privileges (if running as root) and
     applies rlimits, run in the forked child before exec — never in the
-    parent event loop.
+    parent event loop. Returns (None, False) on Windows / non-POSIX platforms."""
 
-    `enforce_memory_limit=False` is used for Node: V8 reserves a large
-    virtual address range up front (well beyond what it actually commits)
-    and simply fails to start under a tight RLIMIT_AS — confirmed against
-    this image's Node build, not a hypothetical. Node still gets the
-    CPU-time, process-count, and (from the caller) wall-clock limits; only
-    the address-space cap is skipped for it."""
+    if resource is None or not hasattr(os, "geteuid"):
+        return None, False
 
     running_as_root = os.geteuid() == 0
     drop_to = _nobody_uid_gid() if running_as_root else None
@@ -144,36 +145,43 @@ def build_preexec_fn(limits: SandboxLimits, enforce_memory_limit: bool = True):
     def _preexec():
         # Detach from the parent's process group so a timeout SIGKILL to the
         # child doesn't need to hunt down orphans it spawned.
-        os.setsid()
+        if hasattr(os, "setsid"):
+            os.setsid()
 
-        if drop_to is not None:
+        if drop_to is not None and hasattr(os, "setgid") and hasattr(os, "setuid"):
             uid, gid = drop_to
             os.setgid(gid)
             os.setuid(uid)
 
-        cpu = limits.cpu_seconds
-        resource.setrlimit(resource.RLIMIT_CPU, (cpu, cpu))
+        if resource is not None:
+            cpu = limits.cpu_seconds
+            if hasattr(resource, "RLIMIT_CPU"):
+                try:
+                    resource.setrlimit(resource.RLIMIT_CPU, (cpu, cpu))
+                except (ValueError, OSError):
+                    pass
 
-        if enforce_memory_limit:
-            mem_bytes = limits.memory_mb * 1024 * 1024
-            try:
-                resource.setrlimit(resource.RLIMIT_AS, (mem_bytes, mem_bytes))
-            except (ValueError, OSError):
-                # Unavailable under some interpreters — CPU/timeout/nproc
-                # limits below still bound the damage even if this is skipped.
-                pass
+            if enforce_memory_limit and hasattr(resource, "RLIMIT_AS"):
+                mem_bytes = limits.memory_mb * 1024 * 1024
+                try:
+                    resource.setrlimit(resource.RLIMIT_AS, (mem_bytes, mem_bytes))
+                except (ValueError, OSError):
+                    pass
 
-        try:
-            resource.setrlimit(resource.RLIMIT_NPROC, (limits.max_processes, limits.max_processes))
-        except (ValueError, OSError):
-            pass
+            if hasattr(resource, "RLIMIT_NPROC"):
+                try:
+                    resource.setrlimit(resource.RLIMIT_NPROC, (limits.max_processes, limits.max_processes))
+                except (ValueError, OSError):
+                    pass
 
-        try:
-            resource.setrlimit(resource.RLIMIT_FSIZE, (limits.max_output_bytes, limits.max_output_bytes))
-        except (ValueError, OSError):
-            pass
+            if hasattr(resource, "RLIMIT_FSIZE"):
+                try:
+                    resource.setrlimit(resource.RLIMIT_FSIZE, (limits.max_output_bytes, limits.max_output_bytes))
+                except (ValueError, OSError):
+                    pass
 
     return _preexec, (drop_to is not None or not running_as_root)
+
 
 
 _UNSHARE_NET_CHECKED = False

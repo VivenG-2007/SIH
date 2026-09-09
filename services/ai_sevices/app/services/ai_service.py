@@ -9,7 +9,7 @@ from app.config import get_settings
 from app.core.db import get_db
 from app.core.logging import get_logger
 from app.core.redis_client import get_redis
-from app.services.ai_providers import get_provider
+from app.services.ai_providers import chat_with_fallback
 
 logger = get_logger()
 
@@ -31,7 +31,6 @@ async def run_chat(
     use_cache: bool = True,
 ) -> dict:
     settings = get_settings()
-    provider = get_provider()
     resolved_model = model or settings.ai_model
     cache_key = _cache_key(messages, resolved_model)
 
@@ -45,7 +44,9 @@ async def run_chat(
         except Exception as exc:
             logger.warning("ai_cache_read_failed", error=str(exc))
 
-    result = await provider.chat(messages, resolved_model)
+    # Use the fallback-aware call: tries primary (AI_PROVIDER), falls back to
+    # OpenRouter automatically on 5xx / network errors (see ai_providers/__init__.py).
+    result = await chat_with_fallback(messages, resolved_model)
 
     if use_cache:
         try:

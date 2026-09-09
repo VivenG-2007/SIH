@@ -57,6 +57,27 @@ class InvestmentOption:
             return None
         return self.risk_reduction_usd / self.cost_usd
 
+    @property
+    def rosi(self) -> float | None:
+        """Return on Security Investment = (risk_reduction_usd - cost_usd) / cost_usd.
+
+        This is the *net* ROSI: the gain above and beyond what you spent,
+        expressed as a fraction of the spend. ROSI > 0 means the control
+        produces more risk reduction than it costs; ROSI = 0 means break-even;
+        ROSI < 0 means the control costs more than it reduces in modeled risk.
+
+        Distinction from roi: roi = risk_reduction / cost (gross multiplier),
+        rosi = (risk_reduction - cost) / cost (net return, i.e. roi - 1).
+        Both are surfaced so a CISO can see the gross "how many times does
+        this pay back" (roi) and the net "is this investment worth it at all"
+        (rosi >= 0 is the break-even test) in one place.
+
+        None for a free (cost_usd=0) candidate.
+        """
+        if self.cost_usd <= 0:
+            return None
+        return (self.risk_reduction_usd - self.cost_usd) / self.cost_usd
+
 
 def rank_by_roi(options: list[InvestmentOption]) -> list[InvestmentOption]:
     """Candidates sorted by ROI descending, for a CISO-facing report akin
@@ -80,6 +101,25 @@ class OptimizationResult:
     total_risk_reduction_usd: int
     budget_usd: int
     budget_utilization_pct: float
+
+    @property
+    def portfolio_rosi(self) -> float | None:
+        """Net ROSI across the entire selected portfolio.
+
+        = (total_risk_reduction_usd - total_cost_usd) / total_cost_usd
+
+        A portfolio_rosi >= 0 means the selected investments collectively
+        produce more modeled risk reduction than they cost. None when the
+        portfolio costs nothing (free-only selections).
+        """
+        if self.total_cost_usd <= 0:
+            return None
+        return (self.total_risk_reduction_usd - self.total_cost_usd) / self.total_cost_usd
+
+    @property
+    def total_rosi(self) -> float | None:
+        """Alias for portfolio_rosi."""
+        return self.portfolio_rosi
 
 
 def optimize_investment(

@@ -3,9 +3,18 @@ import os
 os.environ.setdefault("ENVIRONMENT", "development")
 os.environ.setdefault("MONGODB_URI", "mongodb://localhost:27017")
 
-import pytest
-
+from contextlib import contextmanager
 from app.services.risk import optimization as opt
+
+
+@contextmanager
+def raises(exc_type):
+    try:
+        yield
+    except exc_type:
+        pass
+    else:
+        raise AssertionError(f"Expected exception {exc_type.__name__} not raised")
 
 
 def _opt(key, cost, reduction):
@@ -28,15 +37,16 @@ def test_optimizer_picks_best_combination_within_budget():
 
 
 def test_optimizer_never_exceeds_budget():
-    options = [_opt("a", 10, 5), _opt("b", 15, 8), _opt("c", 7, 4)]
-    result, _ = opt.optimize_investment(options, budget_usd=20)
-    assert result.total_cost_usd <= 20
+    options = [_opt("a", 10, 5), _opt("b", 20, 15), _opt("c", 30, 25)]
+    result, _ = opt.optimize_investment(options, budget_usd=25)
+    assert result.total_cost_usd <= 25
 
 
 def test_optimizer_empty_options_returns_nothing():
-    result, _ = opt.optimize_investment([], budget_usd=100)
+    result, trail = opt.optimize_investment([], budget_usd=100)
     assert result.selected == []
     assert result.total_cost_usd == 0
+    assert result.total_risk_reduction_usd == 0
 
 
 def test_optimizer_zero_budget_selects_nothing():
@@ -46,7 +56,7 @@ def test_optimizer_zero_budget_selects_nothing():
 
 
 def test_optimizer_rejects_negative_budget():
-    with pytest.raises(ValueError):
+    with raises(ValueError):
         opt.optimize_investment([], budget_usd=-1)
 
 
@@ -82,7 +92,7 @@ def test_optimizer_trail_notes_when_every_candidate_is_evidenced():
 
 def test_roi_is_reduction_over_cost():
     o = opt.InvestmentOption(key="mfa", label="MFA", cost_usd=80_000, risk_reduction_usd=1_400_000)
-    assert o.roi == pytest.approx(17.5)
+    assert abs(o.roi - 17.5) < 1e-6
 
 
 def test_roi_is_none_for_free_candidate():
@@ -105,8 +115,9 @@ def test_rank_by_roi_puts_undefined_roi_last():
 
 
 def test_optimizer_rejects_negative_cost_or_reduction():
-    with pytest.raises(ValueError):
+    with raises(ValueError):
         opt.optimize_investment([_opt("a", -5, 10)], budget_usd=100)
+
 
 
 def test_optimizer_is_exact_not_greedy():
@@ -127,3 +138,29 @@ def test_evidence_trail_lists_all_candidates_considered():
     options = [_opt("a", 10, 5), _opt("b", 15, 8)]
     _, trail = opt.optimize_investment(options, budget_usd=25)
     assert len(trail.inputs["candidates"]) == 2
+
+
+def test_rosi_net_return_and_portfolio_rosi():
+    # Net ROSI = (reduction - cost) / cost = ROI - 1
+    mfa = opt.InvestmentOption(key="mfa", label="MFA", cost_usd=50_000, risk_reduction_usd=250_000)
+    assert abs(mfa.roi - 5.0) < 1e-6
+    assert abs(mfa.rosi - 4.0) < 1e-6
+
+    free = opt.InvestmentOption(key="free", label="Free", cost_usd=0, risk_reduction_usd=10_000)
+    assert free.rosi is None
+
+    # Portfolio with MFA and EDR
+    edr = opt.InvestmentOption(key="edr", label="EDR", cost_usd=50_000, risk_reduction_usd=150_000)
+    result, _ = opt.optimize_investment([mfa, edr], budget_usd=100_000)
+    # Total cost = 100k, total reduction = 400k -> portfolio_rosi = (400k - 100k) / 100k = 3.0
+    assert abs(result.portfolio_rosi - 3.0) < 1e-6
+    assert abs(result.total_rosi - 3.0) < 1e-6
+
+
+if __name__ == "__main__":
+    for name, func in list(globals().items()):
+        if name.startswith("test_") and callable(func):
+            func()
+            print(f"PASS: {name}")
+    print("All optimization tests passed!")
+
