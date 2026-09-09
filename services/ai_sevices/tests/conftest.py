@@ -19,6 +19,19 @@ def db():
 
 
 @pytest.fixture(autouse=True)
+def _stub_redis(monkeypatch):
+    """Unit tests exercise Mongo as the durable store. Redis is the live
+    ring buffer in production; a ConnectionError here matches 'Redis
+    unreachable, fall back to Mongo' rather than talking to a leftover
+    local Redis with cross-test state."""
+
+    def _disabled():
+        raise ConnectionError("redis disabled in unit tests")
+
+    monkeypatch.setattr("app.core.redis_client.get_redis", _disabled)
+
+
+@pytest.fixture(autouse=True)
 def _dev_encryption_key(monkeypatch):
     """Every test in this suite that touches business_criticality.py,
     ingestion.py, or calibration.py now needs a working encryption key

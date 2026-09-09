@@ -37,6 +37,8 @@ Both remain HONEST about their coverage, not "fully calibrated":
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 from app.config import get_settings
 from app.services.risk import business_criticality as bc
 from app.services.risk import calibration
@@ -46,29 +48,73 @@ from app.services.risk import ingestion
 from app.services.risk import kev
 from app.services.risk.evidence import EvidenceTrail
 
+# Named assets the live demo / command-center UI uses. These are NOT a
+# global prefix allow-list — a grant is always written under the calling
+# organization, so org A and org B can both demo `acme/payments-api`
+# without either seeing the other's telemetry, mappings, or calibration.
+DEMO_ASSET_IDS = frozenset({
+    "acme/payments-api",
+    "payments-api",
+    "auth-service",
+    "checkout-service",
+    "customer-portal",
+    "core-banking",
+    "cloud-infra",
+})
+
+DEMO_GRANTS_COLLECTION = "demo_asset_grants"
+
+
+async def seed_demo_asset_grant(db, organization_id: str, asset_id: str) -> None:
+    """Insert a per-org demo grant for a named demo asset.
+
+    This replaces the old global prefix allow-list (`acme/*`, `demo-*`,
+    …) which let any authenticated org write pricing-affecting data for
+    those names, including assets another org had actually scanned.
+    """
+    if db is None or not organization_id or asset_id not in DEMO_ASSET_IDS:
+        return
+    await db[DEMO_GRANTS_COLLECTION].update_one(
+        {"organizationId": organization_id, "asset_id": asset_id},
+        {
+            "$setOnInsert": {
+                "organizationId": organization_id,
+                "asset_id": asset_id,
+                "seededAt": datetime.now(timezone.utc).isoformat(),
+            }
+        },
+        upsert=True,
+    )
+
 
 async def user_can_manage_asset(db, organization_id: str, asset_id: str) -> bool:
     """Authorization check for write operations on an asset's risk data
     (business-criticality mappings, ingestion events).
 
-    Scoped by ORGANIZATION now (P0#1), not by individual user_id — any
-    member of the organization that has scanned this asset through this
-    platform may manage its risk data, matching a real org's actual
-    working pattern (two teammates in the same org who both connected the
-    same repo share one business-context mapping, rather than maintaining
-    silently-diverging duplicates or being blocked from each other's
-    work). This is real org-scoped authorization, not the individual-user
-    approximation an earlier version of this function used before an
-    organization model existed.
+    Scoped by ORGANIZATION (P0#1) — any member of the organization that has
+    scanned this asset, or that holds a per-org demo grant for it, can
+    manage its risk data. Fail-closed: a store outage is a deny, never
+    an implicit allow.
     """
     try:
+        if not organization_id or not asset_id or db is None:
+            return False
         doc = await db.scan_history.find_one({"organizationId": organization_id, "repo": asset_id})
-        return doc is not None
+        if doc is not None:
+            return True
+        grant = await db[DEMO_GRANTS_COLLECTION].find_one(
+            {"organizationId": organization_id, "asset_id": asset_id}
+        )
+        return grant is not None
     except Exception:
-        # A DB hiccup should fail closed for a write-authorization check —
-        # better to reject a legitimate write than silently allow one
-        # because Mongo was unreachable for a moment.
         return False
+
+
+async def authorize_asset_write(db, organization_id: str, asset_id: str) -> bool:
+    """Seed a per-org demo grant when applicable, then authorize."""
+    await seed_demo_asset_grant(db, organization_id, asset_id)
+    return await user_can_manage_asset(db, organization_id, asset_id)
+
 
 
 def _default_asset_context_note() -> str:

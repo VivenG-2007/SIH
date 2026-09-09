@@ -33,6 +33,7 @@ from app.routers import (
     scenario,
     search,
     simulation,
+    simulation_logs,
 )
 from app.services.reconciliation import run_reconciliation_loop
 
@@ -201,6 +202,7 @@ app.include_router(risk.router)
 app.include_router(ingestion.router)
 app.include_router(scenario.router)
 app.include_router(simulation.router)
+app.include_router(simulation_logs.router)
 app.include_router(compliance.router)
 app.include_router(nlquery.router)
 

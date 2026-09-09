@@ -49,6 +49,10 @@ async def ensure_indexes() -> None:
     # ownerId filter.
     await db.scan_history.create_index([("ownerId", 1), ("scannedAt", -1)])
     await db.scan_history.create_index([("scannedAt", -1)])
+    await db.scan_history.create_index([("organizationId", 1), ("repo", 1)])
+    await db.demo_asset_grants.create_index(
+        [("organizationId", 1), ("asset_id", 1)], unique=True
+    )
     # Note: RAG memory (app/core/memory_store.py) no longer stores anything
     # in MongoDB — finding embeddings + metadata live in a Chroma Cloud
     # collection (app/core/chroma_client.py), so there's no finding_memory

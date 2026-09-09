@@ -210,17 +210,24 @@ Verification) is strong enough that a full demo of it reads as "this is a
 vulnerability remediation platform," not "cyber risk investment
 optimization platform."
 
+**The differentiator is Confidence Breakdown / Evidence Trail, not feature
+count.** Every ₹ figure on `/scenario` already carries the ✓/✗ data-basis
+checklist. The demo is that panel, walked in order, not a tour of how
+many modules exist.
+
 **Demo time allocation** (out of a ~7-minute slot):
 
 | Section | Time | What's shown |
 |---|---|---|
-| Problem framing | 45s | The judge-facing question: "how much is this vulnerability actually costing you, and what should you buy to fix it?" |
-| **The one causal story (`/scenario`)** | **3.5–4 min** | Threat → asset → criticality → likelihood → EAL → AI explains → what-if MFA → optimizer → recalculation → risk decreases |
-| Business Criticality + Confidence Breakdown | 1 min | Register a real business-service mapping live; show the ✓/✗ data-basis checklist |
-| Autonomous remediation (Scanner → AI Fix → PR) | **1–1.5 min** | ONE finding, fixed, PR opened — proof it's real, not the centerpiece |
-| Close | 30s | What's illustrative today vs. what's real, stated plainly |
+| Problem framing | 30s | The judge-facing question: "how much is this vulnerability actually costing you, and what should you buy to fix it?" Promise that every number they will see comes with a Confidence Breakdown. |
+| **The one causal story (`/scenario`), led by Evidence Trail** | **4–4.5 min** | Run one scenario on `acme/payments-api`. **Do not narrate the step titles.** Open Confidence Breakdown on the EAL / financial-exposure step first: walk ✓ Industry benchmark, ✓/✗ Asset criticality, ✓ CVSS, ✓ Threat status, ✗ Organization historical loss data. Then rewind the same chain — threat → asset → criticality → likelihood → EAL — with that checklist still visible. AI explains (narration only). "What if MFA?" → optimizer → risk decreases, each with its own Evidence Trail. |
+| Live business-criticality registration | 45s | Register a real mapping; the Asset criticality row in Confidence Breakdown is no longer the platform default (`usedDefaultCriticality` flips). |
+| Autonomous remediation | **45s–1 min** | ONE finding, fixed, PR opened — proof the loop closes, not the centerpiece |
+| Close | 30s | What's illustrative today vs. what's real, stated from the same ✓/✗ list they just watched |
 
 Remediation gets a clear demonstration, not the majority of the clock.
+Do not spend time counting scanners, graphs, RAG, blockchain, or
+Kubernetes. If a judge asks about those, point at the Q&A table.
 
 ---
 
@@ -241,7 +248,7 @@ legitimate answer for a box that stays):
 | MongoDB | AI-service persistence (chat, evidence) | **Keep**, mention briefly |
 | ChromaDB | RAG retrieval for AI explanations (item 7) | **Keep**, one sentence |
 | GraphDB (Neo4j etc.) | Not present in the codebase — replaced by an in-memory traversal (item 6) | **Cut from the diagram entirely** |
-| Redis | Caching / rate limiting | **Keep**, one word: "caching" |
+| Redis | Caching, rate limiting, and the shared telemetry ring buffer | **Keep**, one sentence: shared buffer, not a process-local dict |
 | BullMQ | Async job queue for scans | **Keep**, one word: "job queue" |
 | Blob storage | File/report storage | **Keep**, one word |
 | MCP | Tool-calling protocol for AI providers | **Optional/future scope** unless directly demoed |
@@ -282,9 +289,10 @@ only orders and narrates. `POST /api/v1/risk/scenario/what-if` and the
 own `EvidenceTrail`s via `ConfidenceBreakdown` (item 3), with a
 deterministic-figures-only AI narrative on top (item 7).
 
-**This is the demo.** Everything else (item 8's remediation clip, item
-2's live business-criticality registration) is a supporting beat inside
-or around this one story, not a separate feature tour.
+**This is the demo.** Lead with Confidence Breakdown on `/scenario`.
+Everything else (item 8's remediation clip, item 2's live
+business-criticality registration) is a supporting beat inside this one
+story, not a separate feature tour.
 
 ---
 
@@ -864,3 +872,50 @@ not addressed this round. The BullMQ-queue architecture change for
 Monte Carlo is a recommendation, not an implementation — P2 diagnosed the
 problem and validated (and invalidated) candidate fixes; it didn't build
 the queue-based redesign.
+
+---
+
+## Round 6 — org-scoped demo grants, Redis telemetry buffer, demo script
+
+Two production-hardening nits from the last pass, plus a demo-script
+decision. Everything else in this document stays as already triaged.
+
+### #1 — write-path allow-list is org-scoped and fail-closed
+
+`user_can_manage_asset` no longer returns True for any `acme/*` /
+`demo-*` / named service globally, and no longer returns True when the
+store throws. A Mongo/auth outage is a **deny**.
+
+Named demo assets (`acme/payments-api`, `auth-service`, …) still work
+for the live demo: `seed_demo_asset_grant` upserts a row in
+`demo_asset_grants` **under the calling organization** before the write.
+Org A and org B can both demo the same asset name; they never share the
+grant, the telemetry, or the mapping. `acme/webapp` is not in that set
+— it still requires a real `scan_history` row, which is what the
+cross-org isolation tests already asserted.
+
+Wired through `authorize_asset_write` on business-criticality
+registration, `/ingestion/simulate`, and `/ingestion/stream-tick`
+(the command-center tick path had been ungated).
+
+### #2 — telemetry ring buffer is Redis, not process-local
+
+`ingestion._IN_MEMORY_EVENT_BUFFER` is gone. The last
+`MAX_EVENTS_PER_ASSET` events per org+asset live in Redis
+(`ingestion:events:{org}:{asset}`), the same Redis this service already
+uses for rate limiting and AI cache. Mongo remains the durable store and
+the fallback when Redis is down. A demo reset (`POST
+/ingestion/events/{asset_id}/reset`) clears both.
+
+**Pitch line if asked:** "The live stream is a Redis ring buffer shared
+across workers; Mongo is what survives a Redis blip. It is not a
+process-local dict that resets when the API process restarts."
+
+### Demo script (do this, not a feature census)
+
+Open `/scenario` → run one what-if → **Confidence Breakdown is open on
+every step that has an Evidence Trail** (`defaultOpen` on that page). Walk
+the ✓/✗ list on the EAL number before naming any other module. Then the
+causal chain, then one remediation PR. Q&A is the tables already in this
+document — rehearse those answers; do not re-open the round 2–5
+verdicts.

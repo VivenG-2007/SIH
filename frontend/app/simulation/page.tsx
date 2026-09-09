@@ -19,6 +19,7 @@ import Card from '@/components/ui/Card';
 import Badge from '@/components/ui/Badge';
 import Button from '@/components/ui/Button';
 import { simulationApi } from '@/lib/api';
+import SimulationLayout from '@/components/simulation/SimulationLayout';
 
 // ---------------------------------------------------------------------------
 // Types — mirror app/routers/simulation.py's response shapes exactly
@@ -453,11 +454,50 @@ function SimulationPageInner() {
 }
 
 export default function SimulationPage() {
+  const [activeTab, setActiveTab] = useState<'platform' | 'repo_scan'>('platform');
+
   return (
     <ProtectedShell>
-      <Suspense fallback={<div className="max-w-5xl mx-auto py-16 text-center text-text-muted text-sm">Loading…</div>}>
-        <SimulationPageInner />
-      </Suspense>
+      <div className="w-full">
+        <div className="bg-[#0b101d] border-b border-slate-800 px-6 py-2.5 flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setActiveTab('platform')}
+              className={`px-3.5 py-1.5 text-xs font-bold rounded-xl transition flex items-center gap-2 ${
+                activeTab === 'platform'
+                  ? 'bg-gradient-to-r from-cyan-600 to-blue-600 text-white shadow-md shadow-cyan-900/40'
+                  : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
+              }`}
+            >
+              <Sparkles className="w-3.5 h-3.5 text-cyan-300" />
+              AI-Powered Risk Quantification Platform (Full 11-Step Simulation)
+            </button>
+            <button
+              onClick={() => setActiveTab('repo_scan')}
+              className={`px-3.5 py-1.5 text-xs font-semibold rounded-xl transition flex items-center gap-1.5 ${
+                activeTab === 'repo_scan'
+                  ? 'bg-slate-800 text-white border border-slate-700'
+                  : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
+              }`}
+            >
+              <Activity className="w-3.5 h-3.5 text-slate-400" />
+              Repository Scan Findings Simulator
+            </button>
+          </div>
+          <span className="text-[11px] font-mono text-cyan-400 bg-cyan-950/60 px-2.5 py-0.5 rounded-full border border-cyan-800/60 hidden sm:inline">
+            Patchline X Cyber Risk Engine v2.4
+          </span>
+        </div>
+
+        {activeTab === 'platform' ? (
+          <SimulationLayout />
+        ) : (
+          <Suspense fallback={<div className="max-w-5xl mx-auto py-16 text-center text-slate-400 text-sm">Loading repository scan data…</div>}>
+            <SimulationPageInner />
+          </Suspense>
+        )}
+      </div>
     </ProtectedShell>
   );
 }
+
