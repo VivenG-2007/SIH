@@ -1,7 +1,7 @@
 import httpx
+from fastapi import HTTPException
 
 from app.config import get_settings
-from fastapi import HTTPException
 
 
 async def chat(messages: list[dict], model: str | None = None) -> dict:
@@ -10,32 +10,24 @@ async def chat(messages: list[dict], model: str | None = None) -> dict:
     # Resolve API key (AZURE_OPENAI_API_KEY preferred, falls back to AI_API_KEY)
     api_key = settings.azure_openai_api_key or settings.ai_api_key
 
-    # Resolve deployment/model name
+    # Resolve deployment/model name (default to gpt-4.1-mini if unsupported or missing)
     deployment = (
         model
         or settings.azure_openai_deployment_name
         or settings.azure_openai_deployment
-        or settings.ai_model
+        or "gpt-4.1-mini"
     )
+    if deployment in ("llama-3.1-8b-instant", "mock"):
+        deployment = settings.azure_openai_deployment_name or "gpt-4.1-mini"
 
     if not settings.azure_openai_endpoint:
         raise HTTPException(status_code=500, detail="AZURE_OPENAI_ENDPOINT not configured")
     if not api_key:
         raise HTTPException(status_code=500, detail="AZURE_OPENAI_API_KEY not configured")
-    if not deployment:
-        raise HTTPException(status_code=500, detail="AZURE_OPENAI_DEPLOYMENT_NAME not configured")
 
-    # NOTE: computed but not currently passed into the request below (no
-    # `api-version` query param is added anywhere in this function) — flagging
-    # rather than silently deleting or guessing the fix, since this may be a
-    # real bug (Azure OpenAI's REST API normally requires api-version) outside
-    # the scope of the CI/lint pass that surfaced it. Suppressing the lint
-    # warning here rather than papering over it.
-    api_version = settings.azure_openai_api_version or "2024-12-01-preview"  # noqa: F841
+    api_version = settings.azure_openai_api_version or "2024-08-01-preview"
 
-    # ── Build the base URL ──────────────────────────────────────────────────
-    # Strip any trailing path from whatever the user pasted into AZURE_OPENAI_ENDPOINT
-    # so we can compose the final path cleanly ourselves.
+    # Strip any trailing path from AZURE_OPENAI_ENDPOINT
     base = settings.azure_openai_endpoint.rstrip("/")
     for suffix in (
         "/openai/v1/responses",
@@ -47,30 +39,16 @@ async def chat(messages: list[dict], model: str | None = None) -> dict:
             base = base[: -len(suffix)].rstrip("/")
             break
 
-    # Azure AI Foundry uses the Responses API:
-    # POST {base}/openai/v1/responses
-    # Body: {"model": "<deployment>", "input": [...], "instructions": "..."}
-    url = f"{base}/openai/v1/responses"
-
-    # ── Convert messages → Responses API format ────────────────────────────
-    # The Responses API takes:
-    #   instructions – the system prompt (separate top-level field)
-    #   input        – array of user/assistant turns, OR a plain string
-    system_content = ""
-    turns: list[dict] = []
-    for msg in messages:
-        if msg.get("role") == "system":
-            system_content = msg.get("content", "")
-        else:
-            turns.append({"role": msg["role"], "content": msg.get("content", "")})
-
-    body: dict = {"model": deployment, "input": turns}
-    if system_content:
-        body["instructions"] = system_content
+    # Standard Azure OpenAI Chat Completions Endpoint
+    url = f"{base}/openai/deployments/{deployment}/chat/completions?api-version={api_version}"
 
     headers = {
+        "api-key": api_key,
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
+    }
+    payload = {
+        "messages": messages,
     }
 
     from app.core.logging import get_logger
@@ -80,8 +58,38 @@ async def chat(messages: list[dict], model: str | None = None) -> dict:
         deployment=deployment,
     )
 
-    async with httpx.AsyncClient(timeout=120) as client:
-        response = await client.post(url, headers=headers, json=body)
+    async with httpx.AsyncClient(timeout=60) as client:
+        response = await client.post(url, headers=headers, json=payload)
+
+    # If deployment endpoint returns 404, try Foundry Responses API fallback
+    if response.status_code == 404:
+        responses_url = f"{base}/openai/v1/responses"
+        system_content = ""
+        turns: list[dict] = []
+        for msg in messages:
+            if msg.get("role") == "system":
+                system_content = msg.get("content", "")
+            else:
+                turns.append({"role": msg["role"], "content": msg.get("content", "")})
+        responses_body = {"model": deployment, "input": turns}
+        if system_content:
+            responses_body["instructions"] = system_content
+
+        async with httpx.AsyncClient(timeout=60) as client:
+            resp_foundry = await client.post(responses_url, headers=headers, json=responses_body)
+            if resp_foundry.status_code < 400:
+                data_f = resp_foundry.json()
+                content = ""
+                output_items = data_f.get("output") or []
+                for item in output_items:
+                    if item.get("type") == "message":
+                        for part in item.get("content") or []:
+                            if part.get("type") == "output_text":
+                                content = part.get("text", "")
+                                break
+                        if content:
+                            break
+                return {"content": content, "usage": data_f.get("usage", {})}
 
     if response.status_code >= 400:
         raise HTTPException(
@@ -90,24 +98,9 @@ async def chat(messages: list[dict], model: str | None = None) -> dict:
         )
 
     data = response.json()
-
-    # ── Parse Responses API output ─────────────────────────────────────────
-    # Response shape:
-    # { "output": [{ "type": "message", "content": [{"type": "output_text", "text": "..."}] }] }
-    content = ""
-    try:
-        output_items = data.get("output") or []
-        for item in output_items:
-            if item.get("type") == "message":
-                for part in item.get("content") or []:
-                    if part.get("type") == "output_text":
-                        content = part.get("text", "")
-                        break
-                if content:
-                    break
-    except Exception:
-        pass
-
+    choices = data.get("choices") or []
+    choice = choices[0] if choices else {}
+    content = choice.get("message", {}).get("content", "")
     return {
         "content": content,
         "usage": data.get("usage", {}),

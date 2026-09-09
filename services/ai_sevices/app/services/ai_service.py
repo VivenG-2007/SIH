@@ -1,5 +1,6 @@
 import hashlib
 import json
+import time
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -19,10 +20,7 @@ def _cache_key(messages: list[dict], model: str) -> str:
     return f"ai:cache:{digest}"
 
 
-# Generic entry point behind /api/ai/chat, /api/ai/generate, /api/ai/analyze.
-# All three ultimately call the same pluggable provider — kept as separate
-# endpoints so each can diverge later (different max_tokens, structured
-# output parsing for `analyze`, etc.) without branching provider logic.
+# Generic entry point behind /api/ai/chat, /api/ai/generate, /api/ai/analyze, /scenario/what-if, /simulation/run.
 async def run_chat(
     owner_id: Optional[str],
     messages: list[dict],
@@ -34,19 +32,38 @@ async def run_chat(
     resolved_model = model or settings.ai_model
     cache_key = _cache_key(messages, resolved_model)
 
+    ts_start = time.time()
+    preview = (messages[-1].get("content") or "")[:90].replace("\n", " ")
+    print(f"\n\033[1;36m[LLM CALL INITIATED]\033[0m Provider: \033[1;33m{settings.ai_provider}\033[0m | Model: \033[1;32m{resolved_model}\033[0m | Messages: {len(messages)}")
+    print(f"  \033[90m-> Prompt Preview:\033[0m \"{preview}...\"")
+
     if use_cache:
         try:
             cached = await get_redis().get(cache_key)
             if cached:
                 result = json.loads(cached)
                 result["cached"] = True
+                elapsed_ms = round((time.time() - ts_start) * 1000, 1)
+                print(f"\033[1;32m[LLM CACHE HIT]\033[0m Served from Redis in {elapsed_ms}ms\n")
                 return result
         except Exception as exc:
             logger.warning("ai_cache_read_failed", error=str(exc))
 
-    # Use the fallback-aware call: tries primary (AI_PROVIDER), falls back to
-    # OpenRouter automatically on 5xx / network errors (see ai_providers/__init__.py).
-    result = await chat_with_fallback(messages, resolved_model)
+    try:
+        result = await chat_with_fallback(messages, resolved_model)
+        elapsed_ms = round((time.time() - ts_start) * 1000, 1)
+        provider_used = result.get("provider_used", settings.ai_provider)
+        fallback_tag = " \033[1;31m(FALLBACK TRIGGERED)\033[0m" if result.get("fallback_used") else ""
+        usage = result.get("usage", {})
+        total_tokens = usage.get("total_tokens") or (usage.get("prompt_tokens", 0) + usage.get("completion_tokens", 0))
+        token_str = f" | Tokens: {total_tokens}" if total_tokens else ""
+        print(f"\033[1;32m[LLM CALL SUCCESS]\033[0m Provider: \033[1;33m{provider_used}\033[0m{fallback_tag} | Duration: \033[1;35m{elapsed_ms}ms\033[0m{token_str}")
+        resp_preview = (result.get("content") or "")[:120].replace("\n", " ")
+        print(f"  \033[90m-> Response Preview:\033[0m \"{resp_preview}...\"\n")
+    except Exception as exc:
+        elapsed_ms = round((time.time() - ts_start) * 1000, 1)
+        print(f"\033[1;31m[LLM CALL FAILED]\033[0m Error after {elapsed_ms}ms: {exc}\n")
+        raise
 
     if use_cache:
         try:

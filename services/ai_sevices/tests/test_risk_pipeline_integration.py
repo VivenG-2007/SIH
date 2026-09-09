@@ -122,6 +122,42 @@ async def test_user_can_manage_asset_true_for_any_member_of_the_scanning_org(db)
     assert await rp.user_can_manage_asset(db, ORG, "acme/webapp") is True
 
 
+async def test_user_can_manage_asset_fails_closed_on_store_error():
+    class _Boom:
+        async def find_one(self, *args, **kwargs):
+            raise RuntimeError("mongo unavailable")
+
+    class _Db:
+        scan_history = _Boom()
+
+        def __getitem__(self, name):
+            return _Boom()
+
+    assert await rp.user_can_manage_asset(_Db(), ORG, "acme/webapp") is False
+
+
+async def test_demo_asset_grant_is_org_scoped_not_global(db):
+    assert await rp.user_can_manage_asset(db, "org-a", "acme/payments-api") is False
+    await rp.seed_demo_asset_grant(db, "org-a", "acme/payments-api")
+    assert await rp.user_can_manage_asset(db, "org-a", "acme/payments-api") is True
+    assert await rp.user_can_manage_asset(db, "org-b", "acme/payments-api") is False
+    await rp.seed_demo_asset_grant(db, "org-b", "acme/payments-api")
+    assert await rp.user_can_manage_asset(db, "org-b", "acme/payments-api") is True
+
+
+async def test_demo_seed_does_not_grant_non_demo_assets(db):
+    await rp.seed_demo_asset_grant(db, ORG, "acme/webapp")
+    assert await rp.user_can_manage_asset(db, ORG, "acme/webapp") is False
+
+
+async def test_authorize_asset_write_seeds_then_allows_demo_asset(db):
+    assert await rp.authorize_asset_write(db, ORG, "acme/payments-api") is True
+    grant = await db[rp.DEMO_GRANTS_COLLECTION].find_one(
+        {"organizationId": ORG, "asset_id": "acme/payments-api"}
+    )
+    assert grant is not None
+
+
 # --- CISA KEV integration (SIH follow-up critique #3) -----------------------
 
 async def test_finding_with_no_cve_id_never_matches_kev(db):

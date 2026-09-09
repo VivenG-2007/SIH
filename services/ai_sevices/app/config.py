@@ -108,7 +108,7 @@ class Settings(BaseSettings):
     # retries the same request through OpenRouter instead of propagating the
     # failure. Set AI_PROVIDER_FALLBACK=none to disable fallback entirely.
     openrouter_api_key: str = ""
-    openrouter_model: str = "meta-llama/llama-3.3-70b-instruct:free"   # High capability 100% free model on OpenRouter
+    openrouter_model: str = "meta-llama/llama-3.3-70b-instruct"   # High capability model on OpenRouter
     ai_provider_fallback: str = "openrouter"                           # "openrouter" | "none"
 
 

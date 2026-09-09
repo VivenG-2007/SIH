@@ -12,6 +12,8 @@ see ingestion.py's own module docstring for the storage/encryption split.
 
 from __future__ import annotations
 
+from typing import Optional
+
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
@@ -29,12 +31,16 @@ class SimulateRequest(BaseModel):
     source_type: str = Field(..., description="One of: siem, edr, iam, cspm, threat_intel")
 
 
+class StreamTickRequest(BaseModel):
+    asset_id: str = "acme/payments-api"
+    mode: str = Field("simulation", description="'simulation' | 'live' | 'hybrid'")
+    source_type: Optional[str] = Field(None, description="Optional forced source_type, or auto-selected")
+
+
 @router.post("/simulate")
 async def simulate(req: SimulateRequest, user: CurrentUser = Depends(require_auth)):
     db = get_db()
-    # Same write-authorization scoping as business-criticality registration
-    # — see pipeline_integration.user_can_manage_asset's docstring.
-    allowed = await pipeline_integration.user_can_manage_asset(db, user.org_id, req.asset_id)
+    allowed = await pipeline_integration.authorize_asset_write(db, user.org_id, req.asset_id)
     if not allowed:
         await audit.record_audit_event(db, audit.AuditEvent(
             user_id=user.id, organization_id=user.org_id, action="ingestion.simulate",
@@ -58,20 +64,65 @@ async def simulate(req: SimulateRequest, user: CurrentUser = Depends(require_aut
     return event.to_dict()
 
 
-@router.get("/events/{asset_id}")
-async def events(asset_id: str, limit: int = 20, user: CurrentUser = Depends(require_auth)):
+@router.post("/stream-tick")
+async def stream_tick(req: StreamTickRequest, user: CurrentUser = Depends(require_auth)):
+    """Generates or ingests the next continuous telemetry event in real-time,
+    returning the event with its MITRE ATT&CK mapping and updated risk multipliers."""
     db = get_db()
-    evs = await ingestion.recent_events(db, user.org_id, asset_id, limit=limit)
+    allowed = await pipeline_integration.authorize_asset_write(db, user.org_id, req.asset_id)
+    if not allowed:
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                f"No scan history found for asset '{req.asset_id}' under this organization — "
+                f"scan it with this platform first before pushing telemetry for it."
+            ),
+        )
+    source_type = req.source_type
+    if not source_type:
+        import random
+        sources = ["siem", "edr", "iam", "cspm", "threat_intel"]
+        source_type = random.choice(sources)
+
+    try:
+        event = await ingestion.simulate_event(db, user.org_id, source_type, req.asset_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+    known_exp = await ingestion.known_exploited(db, user.org_id, req.asset_id)
+    adj = await ingestion.likelihood_adjustment(db, user.org_id, req.asset_id)
+
+    print(
+        f"\033[1;33m[TELEMETRY STREAM]\033[0m Asset: \033[1;37m{req.asset_id}\033[0m | Source: \033[1;36m{source_type.upper()}\033[0m | Event: \033[1;32m{event.event_type}\033[0m | Severity: {event.severity.upper()} | Multiplier: {round(adj, 2)}x"
+    )
+
     return {
-        "asset_id": asset_id,
-        "events": [e.to_dict() for e in evs],
-        "known_exploited": await ingestion.known_exploited(db, user.org_id, asset_id),
-        "likelihood_multiplier": round(await ingestion.likelihood_adjustment(db, user.org_id, asset_id), 4),
+        "event": event.to_dict(),
+        "known_exploited": known_exp,
+        "likelihood_multiplier": round(adj, 4),
+        "mode": req.mode,
     }
 
 
-@router.post("/events/{asset_id}/reset")
-async def reset(asset_id: str, user: CurrentUser = Depends(require_auth)):
+@router.get("/events")
+@router.get("/events/{asset_id:path}")
+async def events(asset_id: Optional[str] = None, limit: int = 20, user: CurrentUser = Depends(require_auth)):
+    db = get_db()
+    target_asset = asset_id or "core-banking"
+    evs = await ingestion.recent_events(db, user.org_id, target_asset, limit=limit)
+    return {
+        "asset_id": target_asset,
+        "events": [e.to_dict() for e in evs],
+        "known_exploited": await ingestion.known_exploited(db, user.org_id, target_asset),
+        "likelihood_multiplier": round(await ingestion.likelihood_adjustment(db, user.org_id, target_asset), 4),
+    }
+
+
+@router.post("/events/reset")
+@router.post("/events/{asset_id:path}/reset")
+async def reset(asset_id: Optional[str] = None, user: CurrentUser = Depends(require_auth)):
     """Demo/test helper — clears simulated + recorded telemetry for one asset."""
-    await ingestion.clear_asset(get_db(), user.org_id, asset_id)
-    return {"asset_id": asset_id, "cleared": True}
+    target_asset = asset_id or "core-banking"
+    await ingestion.clear_asset(get_db(), user.org_id, target_asset)
+    return {"asset_id": target_asset, "cleared": True}
+

@@ -98,3 +98,38 @@ async def test_payload_is_encrypted_at_rest(db):
     raw_doc = await db[ingestion.COLLECTION].find_one({"organizationId": ORG, "event_id": event.event_id})
     assert "payloadEncrypted" in raw_doc
     assert "generator" not in str(raw_doc["payloadEncrypted"])
+
+
+class _FakeRedis:
+    def __init__(self):
+        self.lists: dict[str, list[str]] = {}
+
+    async def lpush(self, key, val):
+        self.lists.setdefault(key, []).insert(0, val)
+
+    async def ltrim(self, key, start, end):
+        self.lists[key] = self.lists.get(key, [])[start:end + 1]
+
+    async def lrange(self, key, start, end):
+        lst = self.lists.get(key, [])
+        if end < 0:
+            return lst[start:]
+        return lst[start:end + 1]
+
+    async def delete(self, key):
+        self.lists.pop(key, None)
+
+
+async def test_redis_ring_buffer_caps_and_survives_as_read_path(db, monkeypatch):
+    fake = _FakeRedis()
+    monkeypatch.setattr("app.core.redis_client.get_redis", lambda: fake)
+    rng = random.Random(3)
+    for _ in range(5):
+        await ingestion.simulate_event(db, ORG, "edr", ASSET, rng=rng)
+    key = ingestion._buffer_key(ORG, ASSET)
+    assert len(fake.lists[key]) == 5
+    events = await ingestion.recent_events(db, ORG, ASSET, limit=10)
+    assert len(events) == 5
+    await ingestion.clear_asset(db, ORG, ASSET)
+    assert key not in fake.lists
+    assert await ingestion.recent_events(db, ORG, ASSET) == []

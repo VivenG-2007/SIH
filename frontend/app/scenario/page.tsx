@@ -180,7 +180,11 @@ export default function ScenarioPage() {
                     </div>
                     <p className="text-xs text-text-secondary leading-relaxed">{s.explanation}</p>
                     {s.evidence && s.evidence.length > 0 && (
-                      <ConfidenceBreakdown evidence={s.evidence} label="Evidence for this step" />
+                      <ConfidenceBreakdown
+                        evidence={s.evidence}
+                        label="Evidence for this step"
+                        defaultOpen
+                      />
                     )}
                   </Card>
                 </li>

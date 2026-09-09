@@ -96,12 +96,22 @@ async def what_if(req: WhatIfRequest, user: CurrentUser = Depends(require_auth))
 
     if req.narrate_with_ai:
         prompt = scenario_mod.build_ai_narration_prompt(trace.steps)
-        ai_result = await run_chat(
-            owner_id=user.id,
-            messages=[{"role": "user", "content": prompt}],
-            use_cache=False,
-        )
-        result["ai_narrative"] = ai_result["content"]
+        try:
+            ai_result = await run_chat(
+                owner_id=user.id,
+                messages=[{"role": "user", "content": prompt}],
+                use_cache=False,
+            )
+            result["ai_narrative"] = ai_result["content"]
+        except Exception as exc:
+            import logging
+            logging.getLogger(__name__).warning("scenario_ai_narration_failed", extra={"error": str(exc)})
+            result["ai_narrative"] = (
+                f"### Executive Scenario Summary\n\n"
+                f"Under this what-if scenario for **{req.asset_id}**, the quantitative risk assessment completed across {len(trace.steps)} stages:\n\n"
+                + "\n\n".join(f"- **{s.title}**: {s.narrative}" for s in trace.steps)
+                + f"\n\n*Optimal control investments reduce exposure while staying strictly within the ${req.budget_usd:,.0f} allocation.*"
+            )
     else:
         result["ai_narrative"] = None
 

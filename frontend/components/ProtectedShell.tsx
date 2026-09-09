@@ -30,15 +30,16 @@ import CommandSearch from './CommandSearch';
 import LoadingScreen from './LoadingScreen';
 
 const NAV = [
-  { href: '/assessment',       label: 'Risk Assessment', icon: DollarSign },
-  { href: '/scenario',         label: 'What-If Scenario', icon: Workflow },
-  { href: '/dashboard',        label: 'Dashboard',       icon: LayoutDashboard },
-  { href: '/github',           label: 'Repositories',    icon: FolderGit2 },
-  { href: '/scanner',          label: 'Scans',           icon: ScanSearch },
-  { href: '/scanner/history',  label: 'Vulnerabilities', icon: ShieldAlert },
-  { href: '/upload',           label: 'AI Fixes',        icon: Sparkles },
-  { href: '/jira',             label: 'Pull Requests',   icon: GitPullRequest },
+  { href: '/dashboard',        label: 'Risk Command Center', icon: LayoutDashboard },
+  { href: '/scenario',         label: 'What-If Story',       icon: Workflow },
+  { href: '/simulation',       label: 'Portfolio Simulation', icon: Activity },
+  { href: '/assessment',       label: 'Quick Assessment',    icon: DollarSign },
+  { href: '/scanner',          label: 'Telemetry & Scans',   icon: ScanSearch },
+  { href: '/scanner/history',  label: 'Vulnerabilities',     icon: ShieldAlert },
+  { href: '/upload',           label: 'Autonomous Fixer',    icon: Sparkles },
+  { href: '/jira',             label: 'PRs & Verification',  icon: GitPullRequest },
 ];
+
 
 function PatchlinexLogo() {
   return (

@@ -71,10 +71,41 @@ export const riskApi = {
   // services/ai_sevices/app/services/risk/ingestion.py
   simulateTelemetry: (payload: { asset_id: string; source_type: 'siem' | 'edr' | 'iam' | 'cspm' | 'threat_intel' }) =>
     mainApi.post('/api/proxy/api/v1/ingestion/simulate', payload),
+  streamTick: (payload: { asset_id?: string; mode?: 'simulation' | 'live' | 'hybrid'; source_type?: string }) =>
+    mainApi.post('/api/proxy/api/v1/ingestion/stream-tick', payload),
   getTelemetryEvents: (assetId: string, limit = 20) =>
-    mainApi.get(`/api/proxy/api/v1/ingestion/events/${encodeURIComponent(assetId)}`, { params: { limit } }),
+    mainApi.get('/api/proxy/api/v1/ingestion/events', { params: { asset_id: assetId, limit } }),
   resetTelemetry: (assetId: string) =>
-    mainApi.post(`/api/proxy/api/v1/ingestion/events/${encodeURIComponent(assetId)}/reset`),
+    mainApi.post('/api/proxy/api/v1/ingestion/events/reset', { asset_id: assetId }, { params: { asset_id: assetId } }),
+
+  // Unified Real-Time Command Center State (SIH 26105 MVP Core)
+  getUnifiedRiskState: (payload: {
+    industry: string;
+    budget_usd: number;
+    asset_id?: string;
+    applied_control_keys?: string[];
+    cvss_score?: number;
+    mode?: 'simulation' | 'live' | 'hybrid';
+    narrate_with_ai?: boolean;
+  }) => mainApi.post('/api/proxy/api/v1/risk/unified-state', payload),
+
+  // Deep Post-Streaming AI Evaluation Pipeline
+  evaluatePipeline: (payload: {
+    industry: string;
+    budget_usd: number;
+    asset_id?: string;
+    applied_control_keys?: string[];
+    cvss_score?: number;
+    mode?: 'simulation' | 'live' | 'hybrid';
+    scrape_evidence?: boolean;
+    narrate_with_ai?: boolean;
+  }) => mainApi.post('/api/proxy/api/v1/risk/evaluate-pipeline', payload),
+
+  // Firecrawl Web Scraping & Evidence Validation
+  scrapeUrl: (payload: { url: string; formats?: string[] }) =>
+    mainApi.post('/api/proxy/api/v1/risk/scrape-url', payload),
+  scrapeEvidence: (payload?: { refresh?: boolean }) =>
+    mainApi.post('/api/proxy/api/v1/risk/scrape-evidence', payload || {}),
 
   // What-if scenario — the one end-to-end causal demo story (SIH 26105 gap
   // #10). See services/ai_sevices/app/services/risk/scenario.py.
@@ -99,6 +130,7 @@ export const riskApi = {
     narrate_with_ai?: boolean;
   }) => mainApi.post('/api/proxy/api/v1/risk/scenario/what-if', payload),
 };
+
 
 // Risk Simulation dashboard — see
 // services/ai_sevices/app/routers/simulation.py and
@@ -169,19 +201,16 @@ mainApi.interceptors.response.use(
         return Promise.reject(refreshErr);
       }
     }
+    if (typeof window !== 'undefined' && error.response?.status) {
+      console.error(
+        `[mainApi Error ${error.response.status}] ${error.config?.method?.toUpperCase()} ${error.config?.url}:`,
+        error.response.data || error.message
+      );
+    }
     return Promise.reject(error);
   }
 );
 
-// Same idea for direct authApi calls (e.g. AuthContext's `/api/auth/me` on
-// mount). Previously ONLY mainApi had this interceptor, so a call like
-// `/api/auth/me` made after the 15-minute access token expired would just
-// fail with 401 and never retry — from the user's perspective the account
-// looked logged out / showed an "invalid token" error, even though the
-// refresh_token cookie was still valid. `isRefreshCall` guards against
-// infinite recursion when the /refresh call itself comes back 401 (i.e. the
-// refresh token is also expired or revoked) — in that case we give up and
-// let the caller treat the session as logged out.
 authApi.interceptors.response.use(
   (res) => res,
   async (error) => {
@@ -198,6 +227,12 @@ authApi.interceptors.response.use(
         refreshing = null;
         return Promise.reject(refreshErr);
       }
+    }
+    if (typeof window !== 'undefined' && error.response?.status) {
+      console.error(
+        `[authApi Error ${error.response.status}] ${error.config?.method?.toUpperCase()} ${error.config?.url}:`,
+        error.response.data || error.message
+      );
     }
     return Promise.reject(error);
   }
