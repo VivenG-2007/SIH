@@ -1,0 +1,56 @@
+# DISABLED: This Azure-generated workflow deployed without running tests and
+# raced against ci-auth-service.yml (which lints, tests, then deploys via OIDC).
+# Kept as workflow_dispatch-only emergency fallback — use ci-auth-service.yml
+# for all normal deployments.
+name: Build and deploy Node.js app to Azure Web App - auth
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js version
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22.x'
+
+      - name: npm install, build, and test
+        working-directory: services/auth-service
+        run: |
+          npm ci --omit=dev || npm install
+          npm run build --if-present
+
+      - name: Upload artifact for deployment job
+        uses: actions/upload-artifact@v4
+        with:
+          name: node-app-auth
+          path: services/auth-service
+
+  deploy:
+    runs-on: ubuntu-latest
+    needs: build
+    permissions:
+      contents: read
+
+    steps:
+      - name: Download artifact from build job
+        uses: actions/download-artifact@v4
+        with:
+          name: node-app-auth
+          path: services/auth-service
+
+      - name: 'Deploy to Azure Web App'
+        uses: azure/webapps-deploy@v3
+        id: deploy-to-webapp
+        with:
+          app-name: 'auth'
+          slot-name: 'Production'
+          package: services/auth-service
+          publish-profile: ${{ secrets.AZUREAPPSERVICE_PUBLISHPROFILE_1618938C8ED54CC6A5531B41567F98D0 || secrets.AZUREAPPSERVICE_PUBLISHPROFILE_AUTH }}

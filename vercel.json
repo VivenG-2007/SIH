@@ -1,0 +1,47 @@
+{
+  "services": {
+    "frontend": {
+      "root": "frontend",
+      "framework": "nextjs"
+    },
+    "ai_sevices": {
+      "root": "services/ai_sevices"
+    },
+    "auth-service": {
+      "root": "services/auth-service"
+    },
+    "main": {
+      "root": "services/main"
+    }
+  },
+  "rewrites": [
+    {
+      "source": "/api/auth-service(/.*)?",
+      "destination": {
+        "type": "service",
+        "service": "auth-service"
+      }
+    },
+    {
+      "source": "/api/ai_sevices(/.*)?",
+      "destination": {
+        "type": "service",
+        "service": "ai_sevices"
+      }
+    },
+    {
+      "source": "/api/main(/.*)?",
+      "destination": {
+        "type": "service",
+        "service": "main"
+      }
+    },
+    {
+      "source": "/(.*)",
+      "destination": {
+        "type": "service",
+        "service": "frontend"
+      }
+    }
+  ]
+}

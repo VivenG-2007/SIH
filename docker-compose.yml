@@ -1,0 +1,126 @@
+# Local development stack: everything except Supabase and Azure Blob, which
+# are external managed services configured via .env (see docs/deployment.md).
+version: '3.9'
+
+services:
+  redis:
+    image: redis:7-alpine
+    ports: ["6379:6379"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  mongodb:
+    image: mongo:7
+    ports: ["27017:27017"]
+    volumes:
+      - mongo-data:/data/db
+    healthcheck:
+      test: echo 'db.runCommand("ping").ok' | mongosh localhost:27017/test --quiet
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  auth-service:
+    build: ./services/auth-service
+    env_file: ./services/auth-service/.env
+    environment:
+      - MONGODB_URI=mongodb://mongodb:27017
+      - REDIS_URL=redis://redis:6379
+    ports: ["5000:5000"]
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  main-service:
+    build: ./services/main
+    env_file: ./services/main/.env
+    environment:
+      - REDIS_URL=redis://redis:6379
+      - AI_STORAGE_SERVICE_URL=http://ai-storage-service:5002
+    ports: ["5001:5001"]
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  # Standalone BullMQ scan/fix worker(s) — same image as main-service, just a
+  # different process (`node src/worker.js` instead of `node src/server.js`,
+  # see main-service/package.json's "worker" script). Runs ALONGSIDE
+  # main-service's own inline workers (main-service/src/server.js starts
+  # them unless DISABLE_INLINE_WORKERS=true) rather than replacing them —
+  # BullMQ is built for multiple concurrent consumers on the same queue, so
+  # this is real added capacity, not a toggle you have to flip first.
+  #
+  # Scale it with:
+  #   docker compose up --scale worker=4
+  # or bump `replicas` below — Compose (not just Swarm) honors `deploy.
+  # replicas` for `docker compose up`. Each replica runs its own
+  # SCAN_WORKER_CONCURRENCY/FIX_WORKER_CONCURRENCY jobs in parallel, so
+  # total throughput is replicas × concurrency, not just concurrency alone.
+  # See docs/deployment.md § "Scanner workers as their own scalable
+  # service" for the equivalent Azure App Service setup and for guidance
+  # on disabling main-service's inline workers once this is deployed.
+  worker:
+    build: ./services/main
+    command: ["node", "src/worker.js"]
+    env_file: ./services/main/.env
+    environment:
+      - REDIS_URL=redis://redis:6379
+      - AI_STORAGE_SERVICE_URL=http://ai-storage-service:5002
+      - SCAN_WORKER_CONCURRENCY=${SCAN_WORKER_CONCURRENCY:-5}
+      - FIX_WORKER_CONCURRENCY=${FIX_WORKER_CONCURRENCY:-4}
+    depends_on:
+      redis:
+        condition: service_healthy
+    deploy:
+      replicas: 2
+
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.17.0
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
+    ports: ["9200:9200"]
+    volumes:
+      - es-data:/usr/share/elasticsearch/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:9200/_cluster/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  ai-storage-service:
+    build: ./services/ai-storage-service  # Python / FastAPI — Dockerfile handles it, no compose changes needed
+    env_file: ./services/ai-storage-service/.env
+    environment:
+      - MONGODB_URI=mongodb://mongodb:27017
+      - REDIS_URL=redis://redis:6379
+      - ES_URL=http://elasticsearch:9200
+    ports: ["5002:5002"]
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      elasticsearch:
+        condition: service_healthy
+
+  frontend:
+    build: ./frontend
+    environment:
+      - NEXT_PUBLIC_AUTH_API_URL=http://localhost:5000
+      - NEXT_PUBLIC_MAIN_API_URL=http://localhost:5001
+    ports: ["3000:3000"]
+    depends_on:
+      - auth-service
+      - main-service
+      - ai-storage-service
+
+volumes:
+  mongo-data:
+  es-data:

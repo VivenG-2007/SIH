@@ -1,0 +1,38 @@
+const express = require('express');
+const ctrl = require('../controllers/githubController');
+const validate = require('../middleware/validate');
+const { requireAuth } = require('../middleware/auth');
+const { strictLimiter } = require('../middleware/rateLimiter');
+
+const router = express.Router();
+
+// Public: GitHub's own redirect lands here with no app JWT attached — the
+// `state` param (bound to a user id in Redis by oauth/start) authenticates
+// this request instead. Same pattern as jiraRoutes.js.
+router.get('/oauth/callback', ctrl.oauthCallback);
+
+// Public: same reasoning as oauth/callback above, but for the GitHub App
+// install/configure flow — GitHub redirects here with installation_id +
+// setup_action + our own state, no app JWT.
+router.get('/app/callback', ctrl.appInstallCallback);
+
+// Public: GitHub's own webhook POST — authenticated via the
+// X-Hub-Signature-256 HMAC signature (see ctrl.handleWebhook), not a user
+// JWT, so this must stay reachable without requireAuth.
+router.post('/webhook', ctrl.handleWebhook);
+
+router.use(requireAuth, strictLimiter);
+router.get('/oauth/start', ctrl.oauthStartValidators, validate, ctrl.oauthStart);
+router.get('/app/install', ctrl.appInstallStart);
+router.get('/status', ctrl.status);
+router.delete('/disconnect', ctrl.disconnect);
+router.get('/repos', ctrl.listReposValidators, validate, ctrl.listRepos);
+router.post('/issues', ctrl.createIssueValidators, validate, ctrl.createIssue);
+
+// Continuous scanning (watch / auto-rescan)
+router.get('/watched', ctrl.listWatched);
+router.post('/watched', ctrl.watchRepoValidators, validate, ctrl.watchRepo);
+router.delete('/watched/:repositoryId', ctrl.unwatchRepo);
+router.patch('/watched/:repositoryId/settings', ctrl.updateRepoSettingsValidators, validate, ctrl.updateRepoSettings);
+
+module.exports = router;

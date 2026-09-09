@@ -1,0 +1,28 @@
+{
+  "name": "patchlinex",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Patchlinex: AI vulnerability scanning with human-approved fixes. 1 frontend + 3 backends (auth, main — Node/Express; ai-storage — Python/FastAPI), wired end-to-end with JWT, Redis, Supabase, MongoDB, and Azure Blob.",
+  "scripts": {
+    "dev": "concurrently -n auth,main,ai,web -c blue,green,magenta,yellow \"npm --prefix services/auth-service run dev\" \"npm --prefix services/main-service run dev\" \"npm run dev:ai\" \"npm --prefix frontend run dev\"",
+    "dev:ai": "cd services/ai-storage-service && ./venv/bin/python run.py",
+    "install:all": "npm install --prefix services/auth-service && npm install --prefix services/main-service && npm install --prefix frontend && npm run install:ai",
+    "install:ai": "cd services/ai-storage-service && python3 -m venv venv && ./venv/bin/pip install -r requirements.txt -r requirements-dev.txt",
+    "build": "npm --prefix frontend run build",
+    "test": "npm --prefix services/auth-service test && npm --prefix services/main-service test && npm run test:ai",
+    "test:ai": "cd services/ai-storage-service && ./venv/bin/python -m pytest tests/",
+    "lint": "npm --prefix services/auth-service run lint && npm --prefix services/main-service run lint && npm --prefix frontend run lint && npm run lint:ai",
+    "lint:ai": "cd services/ai-storage-service && ./venv/bin/ruff check app",
+    "docker:up": "docker compose up --build",
+    "docker:down": "docker compose down -v",
+    "generate-keys": "npm --prefix services/auth-service run generate-keys",
+    "loadtest:main": "node load-test/main-benchmark.js",
+    "loadtest:auth": "node load-test/auth-benchmark.js",
+    "loadtest:ai": "node load-test/ai-benchmark.js",
+    "loadtest:mixed": "node load-test/mixed-benchmark.js"
+  },
+  "devDependencies": {
+    "autocannon": "^7.15.0",
+    "concurrently": "^9.1.0"
+  }
+}

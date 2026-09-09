@@ -1,0 +1,45 @@
+# Bounds total concurrent sandbox usage regardless of how many executions
+# ai_sevices tries to fan out at once — a caller bug (or a burst of
+# verification requests) can't starve the rest of the cluster. Tune
+# alongside SCAN_WORKER_CONCURRENCY/FIX_WORKER_CONCURRENCY (see
+# docker-compose.yml) — pods.hard should comfortably exceed normal peak
+# concurrency, not exactly match it, or executions will start queueing on
+# Job creation instead of failing fast.
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: patchlinex-sandbox-quota
+  namespace: patchlinex-sandbox
+spec:
+  hard:
+    pods: "40"
+    requests.cpu: "8"
+    requests.memory: 8Gi
+    limits.cpu: "40"
+    limits.memory: 20Gi
+    count/jobs.batch: "40"
+---
+# Per-container defaults/bounds — a safety net if k8s_executor.py's own
+# resources block (SANDBOX_K8S_CPU_LIMIT / SANDBOX_K8S_MEMORY_LIMIT, see
+# config.py) is ever misconfigured to omit limits entirely; every
+# container in this namespace still gets a hard ceiling.
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: patchlinex-sandbox-limits
+  namespace: patchlinex-sandbox
+spec:
+  limits:
+    - type: Container
+      default:
+        cpu: "1"
+        memory: 512Mi
+        ephemeral-storage: 256Mi
+      defaultRequest:
+        cpu: 100m
+        memory: 64Mi
+        ephemeral-storage: 32Mi
+      max:
+        cpu: "2"
+        memory: 1Gi
+        ephemeral-storage: 512Mi

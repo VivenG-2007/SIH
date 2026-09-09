@@ -1,0 +1,40 @@
+{
+  "name": "main-service",
+  "version": "1.0.0",
+  "description": "Patchlinex main service. Primary API entry point: Supabase + Redis, local RS256 JWT verification, proxies to AI/storage service.",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "nodemon src/server.js",
+    "test": "node --require ./test/setup-env.js --test test/*.test.js",
+    "lint": "eslint src --ext .js",
+    "worker": "node src/worker.js",
+    "worker:dev": "nodemon src/worker.js"
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.45.1",
+    "bullmq": "^5.12.0",
+    "compression": "^1.7.4",
+    "cookie-parser": "^1.4.6",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "express-rate-limit": "^7.4.0",
+    "express-validator": "^7.2.0",
+    "helmet": "^7.1.0",
+    "ioredis": "^5.4.1",
+    "jsonwebtoken": "^9.0.2",
+    "pino": "^9.3.2",
+    "pino-http": "^10.2.0",
+    "rate-limit-redis": "^4.2.0",
+    "uuid": "^10.0.0"
+  },
+  "devDependencies": {
+    "eslint": "^8.57.0",
+    "ioredis-mock": "^8.13.1",
+    "nodemon": "^3.1.4"
+  }
+}

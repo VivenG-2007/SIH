@@ -1,0 +1,11 @@
+<!-- ruleid: xss-vue-v-html -->
+<div v-html="rawHtml"></div>
+
+<!-- ok: xss-vue-v-html -->
+<div>{{ safeText }}</div>
+
+<!-- ruleid: xss-angular-innerhtml -->
+<div [innerHTML]="rawHtml"></div>
+
+<!-- ok: xss-angular-innerhtml -->
+<div>{{ safeText }}</div>

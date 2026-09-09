@@ -1,0 +1,77 @@
+# ==== AI + Storage Service — Python dependencies (FastAPI) ====
+# Pinned to recent stable majors as of early 2026. Bump freely; nothing here
+# pins to an old release on purpose.
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+gunicorn==23.0.0
+pydantic==2.10.4
+pydantic-settings==2.7.0
+python-dotenv==1.0.1
+
+# Auth — RS256 verification only (this service never signs tokens)
+PyJWT==2.10.1
+cryptography==44.0.0
+
+# MongoDB (async)
+motor==3.6.0
+pymongo==4.9.2
+
+# Redis (async)
+redis==5.2.1
+
+# Azure Blob Storage
+azure-storage-blob==12.24.0
+azure-core==1.32.0
+azure-identity==1.19.0
+azure-keyvault-secrets==4.9.0
+
+# File uploads
+python-multipart==0.0.20
+
+# Outbound HTTP (AI provider calls)
+httpx==0.28.1
+
+# Rate limiting — Redis-backed (see app/core/rate_limit.py), so this needs
+# the `limits` library's redis storage backend. `limits` is a transitive dep
+# of slowapi; its redis backend talks to the `redis` package already listed
+# above, so no separate client library is needed.
+slowapi==0.1.9
+
+# Structured logging
+structlog==24.4.0
+
+# ASGI request ID / correlation
+asgi-correlation-id==4.3.4
+aiohttp==3.11.11
+
+# Elasticsearch client (search bar / dashboard's finding search) — async client,
+# optional at runtime: app/core/es_client.py no-ops if ES_URL/ES_CLOUD_ID unset.
+elasticsearch[async]==8.17.0
+
+# Chroma Cloud client (RAG memory's vector store — app/core/chroma_client.py).
+# Sync SDK only, so calls are dispatched via asyncio.to_thread; optional at
+# runtime the same way es_client.py is: no-ops if RAG_MEMORY_ENABLED is
+# false or CHROMA_API_KEY is unset.
+chromadb==1.5.9
+
+# SAST engine — the deterministic scanner's primary, AST-based detector
+# (app/services/scanning/semgrep_engine.py). Ships a bundled native binary
+# for the target platform, invoked as a subprocess; no separate install
+# step. manylinux wheels (this service's python:3.12-slim/Debian base) are
+# fully supported — Alpine/musl images are NOT, if the base image ever
+# changes.
+#semgrep==1.99.0
+semgrep==1.60.0 
+# AST engine — the deterministic scanner's third, in-process pass
+# (app/services/scanning/treesitter_engine.py). tree-sitter is the core
+# parser/bindings library; tree-sitter-language-pack ships prebuilt grammars
+# (incl. python, javascript, typescript, tsx, php, c, cpp) as manylinux
+# wheels, so — like semgrep above — there's no separate grammar-build step
+# on this service's python:3.12-slim/Debian base.
+tree-sitter==0.23.2
+tree-sitter-language-pack==0.7.2
+
+# Kubernetes sandbox backend (app/services/sandbox/k8s_executor.py) — only
+# imported/used when SANDBOX_BACKEND=kubernetes; the sync client is fine
+# here since every call site already dispatches it via asyncio.to_thread.
+kubernetes==31.0.0

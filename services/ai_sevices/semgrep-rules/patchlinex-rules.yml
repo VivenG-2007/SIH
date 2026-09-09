@@ -1,0 +1,1273 @@
+# =============================================================================
+# Patchlinex SAST rule pack (Semgrep) - CORRECTED
+# =============================================================================
+# Fixes applied vs. the original pack:
+#   1. Systemic bug: many rules listed multiple alternative patterns as
+#      sibling entries directly under `patterns:`. In Semgrep, `patterns:`
+#      combines its children with AND, not OR. A rule like
+#        patterns:
+#          - pattern: foo($X)
+#          - pattern: bar($X)
+#      requires BOTH to match the same code region simultaneously, which is
+#      normally impossible -> the rule silently never fires. Every such
+#      case below has been converted to `pattern-either:` so the
+#      alternatives are correctly OR'd.
+#   2. crypto-cbc-no-iv and crypto-weak-random-java referenced a
+#      metavariable ($IV / $X) in `metavariable-regex` that never appeared
+#      in the rule's patterns. Semgrep rejects this at load time. Removed
+#      the invalid constraint and reworded the message so the rule's scope
+#      matches what it actually checks.
+#   3. cmdi-py-subprocess-string-arg had a malformed regex (mixed backtick
+#      alternative that can't occur in Python source, and fragile quote
+#      escaping). Rewritten and moved to a double-quoted YAML string.
+#   4. xss-angular-innerhtml's regex required a literal `{{ }}` block
+#      *inside* an `[innerHTML]="..."` attribute, which is not how Angular
+#      binding syntax works ([property] binding and {{ }} interpolation
+#      are two different mechanisms and don't nest that way) -> the regex
+#      could essentially never match real code. Simplified to flag any
+#      [innerHTML] property binding for review.
+#   5. crypto-ecb-mode's Go alternative (`cipher.NewCipher(...)`) matched
+#      any block-cipher constructor, not specifically ECB (Go's stdlib has
+#      no built-in ECB mode), so it would false-positive on legitimate
+#      GCM/CBC code. Replaced with a signature that matches the common
+#      third-party ECB wrapper functions instead.
+#   6. crypto-rsa-small-key's regex used `(rsa|RSA)` under `(?i)`
+#      (case-insensitive) -> redundant alternation, simplified to `rsa`.
+#
+# Use as:
+#   semgrep --config semgrep-rules/patchlinex-rules-corrected.yml ./src
+# =============================================================================
+
+rules:
+
+  # ────────────────────────────────────────────────────────────────────────────
+  # 1. SQL INJECTION
+  # ────────────────────────────────────────────────────────────────────────────
+
+  # ----- Python (direct) -----
+  - id: sqli-py-fstring
+    languages: [python]
+    severity: ERROR
+    message: SQL query built from an f-string is passed directly to execute().
+    metadata:
+      category: SQL Injection
+      severity_label: HIGH
+      cwe: "CWE-89"
+      suggested_fix: Use parameterized queries (cursor.execute(query, params)).
+    patterns:
+      - pattern-either:
+          - pattern: $CURSOR.execute(f"...")
+          - pattern: $CURSOR.execute(f"...", ...)
+
+  - id: sqli-py-concat
+    languages: [python]
+    severity: ERROR
+    message: SQL string built by concatenation inside execute().
+    metadata:
+      category: SQL Injection
+      severity_label: HIGH
+      cwe: "CWE-89"
+      suggested_fix: Use parameterized queries.
+    pattern: $CURSOR.execute("..." + ...)
+
+  - id: sqli-py-percent
+    languages: [python]
+    severity: ERROR
+    message: SQL string uses %-formatting inside execute().
+    metadata:
+      category: SQL Injection
+      severity_label: HIGH
+      cwe: "CWE-89"
+      suggested_fix: Use parameterized queries (placeholders + tuple).
+    pattern: $CURSOR.execute("..." % ...)
+
+  - id: sqli-py-indirect-concat
+    languages: [python]
+    severity: ERROR
+    message: SQL query built by concatenation (assigned to variable then executed).
+    metadata:
+      category: SQL Injection
+      severity_label: HIGH
+      cwe: "CWE-89"
+      suggested_fix: Use parameterized queries.
+    patterns:
+      - pattern-either:
+          - pattern: |
+              $QUERY = "..." + $X
+              ...
+              $CURSOR.execute($QUERY)
+          - pattern: |
+              $QUERY = "..." + $X + ...
+              ...
+              $CURSOR.execute($QUERY)
+
+  - id: sqli-py-format
+    languages: [python]
+    severity: ERROR
+    message: SQL query using .format() interpolation before execute().
+    metadata:
+      category: SQL Injection
+      severity_label: HIGH
+      cwe: "CWE-89"
+      suggested_fix: Use parameterized queries.
+    pattern: |
+      $QUERY = "...".format(...)
+      ...
+      $CURSOR.execute($QUERY)
+
+  - id: sqli-py-raw-django
+    languages: [python]
+    severity: ERROR
+    message: Django raw() query with string interpolation allows SQL injection.
+    metadata:
+      category: SQL Injection
+      severity_label: HIGH
+      cwe: "CWE-89"
+      suggested_fix: Use parameterized raw() with %s placeholders and params list.
+    patterns:
+      - pattern-either:
+          - pattern: $MODEL.objects.raw(f"...")
+          - pattern: $MODEL.objects.raw("..." % ...)
+          - pattern: $MODEL.objects.raw("..." + ...)
+
+  - id: sqli-py-sqlalchemy-text
+    languages: [python]
+    severity: ERROR
+    message: SQLAlchemy text() with concatenation is vulnerable to SQL injection.
+    metadata:
+      category: SQL Injection
+      severity_label: HIGH
+      cwe: "CWE-89"
+      suggested_fix: Use text() with named placeholders and bindparams.
+    patterns:
+      - pattern-either:
+          - pattern: text("..." + ...)
+          - pattern: text(f"...")
+
+  # ----- JavaScript / TypeScript -----
+  - id: sqli-js-template
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: SQL query built from template literal with interpolation.
+    metadata:
+      category: SQL Injection
+      severity_label: HIGH
+      cwe: "CWE-89"
+      suggested_fix: Use parameterized query (e.g., db.query('... WHERE id = ?', [id])).
+    patterns:
+      - pattern-either:
+          - pattern: $DB.query(`...${$X}...`)
+          - pattern: $DB.execute(`...${$X}...`)
+
+  - id: sqli-js-concat
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: SQL string built by concatenation passed to query/execute.
+    metadata:
+      category: SQL Injection
+      severity_label: HIGH
+      cwe: "CWE-89"
+      suggested_fix: Use parameterized query.
+    patterns:
+      - pattern-either:
+          - pattern: $DB.query("..." + ...)
+          - pattern: $DB.execute("..." + ...)
+
+  - id: sqli-js-indirect-concat
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: SQL query built by concatenation into a variable then executed.
+    metadata:
+      category: SQL Injection
+      severity_label: HIGH
+      cwe: "CWE-89"
+      suggested_fix: Use parameterized query.
+    patterns:
+      - pattern-either:
+          - pattern: |
+              let query = "..." + $X;
+              ...
+              $DB.query(query)
+          - pattern: |
+              let query = "..." + $X;
+              ...
+              $DB.execute(query)
+
+  - id: sqli-js-multi-concat
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: SQL query assembled across multiple concatenation statements.
+    metadata:
+      category: SQL Injection
+      severity_label: HIGH
+      cwe: "CWE-89"
+      suggested_fix: Use parameterized query.
+    pattern: |
+      let query = "..." + $X;
+      query = query + $Y;
+      ...
+      $DB.query(query)
+
+  # ----- Java (JDBC) -----
+  - id: sqli-java-statement-concat
+    languages: [java]
+    severity: ERROR
+    message: JDBC Statement.executeQuery() with string concatenation allows SQL injection.
+    metadata:
+      category: SQL Injection
+      severity_label: HIGH
+      cwe: "CWE-89"
+      suggested_fix: Use PreparedStatement with ? placeholders and setString().
+    patterns:
+      - pattern-either:
+          - pattern: $STMT.executeQuery("..." + ...)
+          - pattern: $STMT.execute("..." + ...)
+          - pattern: $STMT.executeUpdate("..." + ...)
+
+  - id: sqli-java-indirect-concat
+    languages: [java]
+    severity: ERROR
+    message: SQL string concatenated into a variable then passed to Statement.
+    metadata:
+      category: SQL Injection
+      severity_label: HIGH
+      cwe: "CWE-89"
+      suggested_fix: Use PreparedStatement.
+    pattern: |
+      String query = "..." + $X;
+      ...
+      $STMT.executeQuery(query);
+
+  - id: sqli-jpa-query
+    languages: [java]
+    severity: ERROR
+    message: JPA @Query with string concatenation is vulnerable to injection.
+    metadata:
+      category: SQL Injection
+      severity_label: HIGH
+      cwe: "CWE-89"
+      suggested_fix: Use named parameters (:param) in @Query and pass with @Param.
+    patterns:
+      - pattern-either:
+          - pattern: '@Query("..." + ...)'
+          - pattern: '@Query("...".concat(...))'
+
+  # ----- C# (ADO.NET) -----
+  - id: sqli-cs-sqlcommand-concat
+    languages: [csharp]
+    severity: ERROR
+    message: SqlCommand with concatenated query string is vulnerable to SQL injection.
+    metadata:
+      category: SQL Injection
+      severity_label: HIGH
+      cwe: "CWE-89"
+      suggested_fix: Use SqlCommand with parameters (SqlParameter).
+    patterns:
+      - pattern-either:
+          - pattern: new SqlCommand("..." + ..., ...)
+          - pattern: new SqlCommand($"...", ...)
+          - pattern: $CMD.CommandText = "..." + ...;
+
+  - id: sqli-cs-entityframework-raw
+    languages: [csharp]
+    severity: ERROR
+    message: Entity Framework FromSqlRaw() with concatenated string allows injection.
+    metadata:
+      category: SQL Injection
+      severity_label: HIGH
+      cwe: "CWE-89"
+      suggested_fix: Use FromSqlInterpolated() or FromSqlRaw() with parameters array.
+    patterns:
+      - pattern-either:
+          - pattern: $DB.FromSqlRaw("..." + ...)
+          - pattern: $DB.FromSqlRaw($"...")
+
+  # ----- Go (database/sql) -----
+  - id: sqli-go-db-query-concat
+    languages: [go]
+    severity: ERROR
+    message: db.Query() with concatenated SQL string allows injection.
+    metadata:
+      category: SQL Injection
+      severity_label: HIGH
+      cwe: "CWE-89"
+      suggested_fix: Use parameterized placeholders (? or $1) with args.
+    patterns:
+      - pattern-either:
+          - pattern: db.Query("..." + ..., ...)
+          - pattern: db.Query(fmt.Sprintf("..." + "..."), ...)
+          - pattern: db.Exec("..." + ..., ...)
+
+  - id: sqli-go-gorm-raw
+    languages: [go]
+    severity: ERROR
+    message: GORM .Raw() or .Exec() with string concatenation allows injection.
+    metadata:
+      category: SQL Injection
+      severity_label: HIGH
+      cwe: "CWE-89"
+      suggested_fix: Use ? placeholders and pass args separately.
+    patterns:
+      - pattern-either:
+          - pattern: $DB.Raw("..." + ...)
+          - pattern: $DB.Exec("..." + ...)
+
+  # ----- Ruby (ActiveRecord) -----
+  - id: sqli-ruby-find-by-sql-concat
+    languages: [ruby]
+    severity: ERROR
+    message: find_by_sql() with string interpolation allows SQL injection.
+    metadata:
+      category: SQL Injection
+      severity_label: HIGH
+      cwe: "CWE-89"
+      suggested_fix: Use parameterized find_by_sql(['...', param]).
+    patterns:
+      - pattern-either:
+          - pattern: $MODEL.find_by_sql("...#{$VAR}...")
+          - pattern: $MODEL.find_by_sql("..." + ...)
+
+  - id: sqli-ruby-where-concat
+    languages: [ruby]
+    severity: ERROR
+    message: ActiveRecord where() with string interpolation is vulnerable.
+    metadata:
+      category: SQL Injection
+      severity_label: HIGH
+      cwe: "CWE-89"
+      suggested_fix: Use ? placeholders (e.g., where('id = ?', id)).
+    patterns:
+      - pattern-either:
+          - pattern: $MODEL.where("..." + ...)
+          - pattern: $MODEL.where("...#{$VAR}...")
+
+  # ----- Taint rules (Python + JS) -----
+  - id: sqli-py-taint
+    languages: [python]
+    severity: ERROR
+    mode: taint
+    message: User-controlled data flows into SQL execute() – potential injection.
+    metadata:
+      category: SQL Injection
+      severity_label: HIGH
+      cwe: "CWE-89"
+      suggested_fix: Trace the input source and use parameterization.
+    pattern-sources:
+      - pattern: request.GET.get(...)
+      - pattern: request.POST.get(...)
+      - pattern: request.COOKIES.get(...)
+      - pattern: request.data.get(...)
+      - pattern: input(...)
+    pattern-sinks:
+      - pattern: $CURSOR.execute(...)
+
+  - id: sqli-js-taint
+    languages: [javascript, typescript]
+    severity: ERROR
+    mode: taint
+    message: User-controlled data (req.query/body) flows into SQL query.
+    metadata:
+      category: SQL Injection
+      severity_label: HIGH
+      cwe: "CWE-89"
+      suggested_fix: Use parameterized queries.
+    pattern-sources:
+      - pattern: req.query
+      - pattern: req.body
+      - pattern: req.params
+      - pattern: req.headers
+    pattern-sinks:
+      - pattern: $DB.query(...)
+      - pattern: $DB.execute(...)
+
+  # ────────────────────────────────────────────────────────────────────────────
+  # 2. CROSS-SITE SCRIPTING (XSS)
+  # ────────────────────────────────────────────────────────────────────────────
+
+  - id: xss-innerhtml-concat
+    languages: [javascript, typescript]
+    severity: WARNING
+    message: .innerHTML assigned with concatenation/interpolation – XSS risk.
+    metadata:
+      category: Cross-Site Scripting (XSS)
+      severity_label: MEDIUM
+      cwe: "CWE-79"
+      suggested_fix: Use .textContent or sanitize with DOMPurify.
+    patterns:
+      - pattern-either:
+          - pattern: $EL.innerHTML = "..." + ...
+          - pattern: $EL.innerHTML = `...${$X}...`
+
+  - id: xss-dangerously-set
+    languages: [javascript, typescript]
+    severity: WARNING
+    message: dangerouslySetInnerHTML with user input is an XSS vector.
+    metadata:
+      category: Cross-Site Scripting (XSS)
+      severity_label: MEDIUM
+      cwe: "CWE-79"
+      suggested_fix: Sanitize with DOMPurify or avoid.
+    # FIXED (this validation pass): 'dangerouslySetInnerHTML={{__html: $X}}'
+    # as a bare JSX-attribute fragment doesn't parse — confirmed the same
+    # bug exists in the original pack too. A full JSX element pattern
+    # parses correctly and still matches regardless of other attributes
+    # on the tag or self-closing vs. explicit closing tag.
+    pattern: '<$TAG dangerouslySetInnerHTML={{__html: $X}} />'
+
+  - id: xss-document-write
+    languages: [javascript, typescript]
+    severity: INFO
+    message: document.write() with dynamic content can introduce XSS.
+    metadata:
+      category: Cross-Site Scripting (XSS)
+      severity_label: LOW
+      cwe: "CWE-79"
+      suggested_fix: Use safe DOM APIs.
+    pattern: document.write(...)
+
+  - id: xss-express-send-concat
+    languages: [javascript, typescript]
+    severity: WARNING
+    message: res.send() with concatenated user input reflects unescaped HTML.
+    metadata:
+      category: Cross-Site Scripting (XSS)
+      severity_label: MEDIUM
+      cwe: "CWE-79"
+      suggested_fix: Use res.json() or escape content.
+    pattern: res.send("..." + ...)
+
+  - id: xss-vue-v-html
+    languages: [generic]
+    paths:
+      include:
+        - "*.vue"
+        - "*.html"
+    severity: WARNING
+    message: v-html renders raw HTML – XSS if user-controlled.
+    metadata:
+      category: Cross-Site Scripting (XSS)
+      severity_label: MEDIUM
+      cwe: "CWE-79"
+      suggested_fix: Use {{ }} or sanitize.
+    pattern-regex: 'v-html\s*='
+
+  - id: xss-insertadjacenthtml
+    languages: [javascript, typescript]
+    severity: WARNING
+    message: insertAdjacentHTML() with dynamic content allows script injection.
+    metadata:
+      category: Cross-Site Scripting (XSS)
+      severity_label: MEDIUM
+      cwe: "CWE-79"
+      suggested_fix: Use insertAdjacentText() or sanitize.
+    patterns:
+      - pattern-either:
+          - pattern: $EL.insertAdjacentHTML($POS, "..." + ...)
+          - pattern: $EL.insertAdjacentHTML($POS, `...${$X}...`)
+
+  - id: xss-outerhtml-assignment
+    languages: [javascript, typescript]
+    severity: WARNING
+    message: .outerHTML assignment with dynamic content can cause XSS.
+    metadata:
+      category: Cross-Site Scripting (XSS)
+      severity_label: MEDIUM
+      cwe: "CWE-79"
+      suggested_fix: Use .textContent or sanitize.
+    patterns:
+      - pattern-either:
+          - pattern: $EL.outerHTML = "..." + ...
+          - pattern: $EL.outerHTML = `...${$X}...`
+
+  - id: xss-dom-sink-eval
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: eval() of user-controlled string is code injection (XSS/RCE).
+    metadata:
+      category: Cross-Site Scripting (XSS)
+      severity_label: HIGH
+      cwe: "CWE-95"
+      suggested_fix: Never eval user input; use JSON.parse or safe parsing.
+    patterns:
+      - pattern-either:
+          - pattern: eval($X)
+          - pattern: new Function($X)
+
+  - id: xss-angular-innerhtml
+    languages: [generic]
+    paths:
+      include:
+        - "*.component.ts"
+        - "*.html"
+    severity: WARNING
+    message: Angular [innerHTML] property binding renders raw HTML – review for XSS if the bound expression includes user-controlled data.
+    metadata:
+      category: Cross-Site Scripting (XSS)
+      severity_label: MEDIUM
+      cwe: "CWE-79"
+      suggested_fix: Use text interpolation {{ }} or sanitize with DomSanitizer.
+    # NOTE: the original regex required a literal {{ }} interpolation block
+    # *inside* the [innerHTML]="..." attribute value. That's not valid
+    # Angular syntax ([property] binding and {{ }} interpolation are separate
+    # mechanisms), so it could never match real code. This flags any
+    # [innerHTML] binding instead.
+    pattern-regex: '\[innerHTML\]\s*=\s*["''][^"'']*["'']'
+
+  - id: xss-innerhtml-indirect
+    languages: [javascript, typescript]
+    severity: WARNING
+    message: Variable built from user data assigned to .innerHTML (XSS).
+    metadata:
+      category: Cross-Site Scripting (XSS)
+      severity_label: MEDIUM
+      cwe: "CWE-79"
+      suggested_fix: Use .textContent or sanitize.
+    pattern: |
+      let html = "..." + $X;
+      ...
+      $EL.innerHTML = html
+
+  - id: xss-js-taint
+    languages: [javascript, typescript]
+    severity: WARNING
+    mode: taint
+    message: User input flows into an HTML sink – potential XSS.
+    metadata:
+      category: Cross-Site Scripting (XSS)
+      severity_label: MEDIUM
+      cwe: "CWE-79"
+      suggested_fix: Use textContent or sanitize.
+    pattern-sources:
+      - pattern: location.search
+      - pattern: location.hash
+      - pattern: document.URL
+      - pattern: document.documentURI
+      - pattern: req.query
+      - pattern: req.body
+    pattern-sinks:
+      - pattern: $EL.innerHTML
+      - pattern: $EL.outerHTML
+      - pattern: document.write(...)
+      - pattern: $EL.insertAdjacentHTML(...)
+
+  # ────────────────────────────────────────────────────────────────────────────
+  # 3. COMMAND INJECTION
+  # ────────────────────────────────────────────────────────────────────────────
+
+  - id: cmdi-py-os-system-concat
+    languages: [python]
+    severity: ERROR
+    message: os.system() with concatenated string allows shell injection.
+    metadata:
+      category: Command Injection
+      severity_label: CRITICAL
+      cwe: "CWE-78"
+      suggested_fix: Use subprocess.run([...], shell=False).
+    pattern: os.system("..." + ...)
+
+  - id: cmdi-py-subprocess-shell-true
+    languages: [python]
+    severity: ERROR
+    message: subprocess with shell=True and string arg allows injection.
+    metadata:
+      category: Command Injection
+      severity_label: HIGH
+      cwe: "CWE-78"
+      suggested_fix: Use list args with shell=False.
+    patterns:
+      - pattern-either:
+          - pattern: subprocess.call(..., shell=True, ...)
+          - pattern: subprocess.run(..., shell=True, ...)
+          - pattern: subprocess.Popen(..., shell=True, ...)
+
+  - id: cmdi-py-subprocess-string-arg
+    languages: [python]
+    severity: ERROR
+    message: subprocess.run() with string first arg invokes shell (even without shell=True) on Unix.
+    metadata:
+      category: Command Injection
+      severity_label: HIGH
+      cwe: "CWE-78"
+      suggested_fix: Use a list of arguments to avoid shell.
+    # FIXED (this validation pass): `metavariable-regex` was a sibling of
+    # `patterns:` at the rule's top level instead of a list item INSIDE
+    # `patterns:`. Semgrep's schema doesn't apply a top-level
+    # metavariable-regex to a `patterns:` block that way — it was silently
+    # ignored, so the rule matched subprocess.run/call/Popen with ANY
+    # first argument (including a safe list literal), not just a string.
+    # Nested it into `patterns:` alongside `pattern-either`, matching the
+    # working structure used by path-traversal-python-open below.
+    patterns:
+      - pattern-either:
+          - pattern: subprocess.call($CMD, ...)
+          - pattern: subprocess.run($CMD, ...)
+          - pattern: subprocess.Popen($CMD, ...)
+      - metavariable-regex:
+          metavariable: $CMD
+          # Matches a plain or f-prefixed string literal (single or double
+          # quoted) as the first argument. Original regex mixed in a backtick
+          # alternative, which cannot occur in Python source, and had broken
+          # quote escaping.
+          regex: "^f?[\"']"
+
+  - id: cmdi-py-os-popen
+    languages: [python]
+    severity: ERROR
+    message: os.popen() with concatenated input allows command injection.
+    metadata:
+      category: Command Injection
+      severity_label: CRITICAL
+      cwe: "CWE-78"
+      suggested_fix: Use subprocess.run with list args.
+    patterns:
+      - pattern-either:
+          - pattern: os.popen("..." + ...)
+          - pattern: os.popen(f"...")
+
+  - id: cmdi-py-indirect
+    languages: [python]
+    severity: ERROR
+    message: Command string built indirectly then passed to shell function.
+    metadata:
+      category: Command Injection
+      severity_label: CRITICAL
+      cwe: "CWE-78"
+      suggested_fix: Build command as list and use subprocess.run.
+    patterns:
+      - pattern-either:
+          - pattern: |
+              $CMD = "..." + $X
+              ...
+              os.system($CMD)
+          - pattern: |
+              $CMD = "..." + $X
+              ...
+              subprocess.run($CMD, shell=True)
+
+  - id: cmdi-js-exec-template
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: exec() with template literal allows shell injection.
+    metadata:
+      category: Command Injection
+      severity_label: CRITICAL
+      cwe: "CWE-78"
+      suggested_fix: Use execFile() or spawn() with array.
+    pattern: exec(`...${$X}...`)
+
+  - id: cmdi-js-exec-concat
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: exec() with concatenation allows shell injection.
+    metadata:
+      category: Command Injection
+      severity_label: CRITICAL
+      cwe: "CWE-78"
+      suggested_fix: Use execFile() with array.
+    pattern: exec("..." + ...)
+
+  - id: cmdi-js-indirect
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: Command string built indirectly then passed to exec().
+    metadata:
+      category: Command Injection
+      severity_label: CRITICAL
+      cwe: "CWE-78"
+      suggested_fix: Use execFile() with array.
+    pattern: |
+      let cmd = "..." + $X;
+      ...
+      exec(cmd)
+
+  - id: cmdi-js-execfile-array
+    languages: [javascript, typescript]
+    severity: WARNING
+    message: execFile()/spawn() with a variable first argument may allow injection if user-controlled.
+    metadata:
+      category: Command Injection
+      severity_label: MEDIUM
+      cwe: "CWE-78"
+      suggested_fix: Validate/allowlist the executable name; use spawn for user input.
+    patterns:
+      - pattern-either:
+          - pattern: execFile($X, ...)
+          - pattern: spawn($X, ...)
+      - metavariable-regex:
+          metavariable: $X
+          regex: "^(?![\"'](/bin/|/usr/)|[\"'](ls|cat|echo|git)[\"']).*"
+
+  - id: cmdi-java-runtime-exec
+    languages: [java]
+    severity: ERROR
+    message: Runtime.exec() with string concatenation allows command injection.
+    metadata:
+      category: Command Injection
+      severity_label: CRITICAL
+      cwe: "CWE-78"
+      suggested_fix: Use ProcessBuilder with a list of arguments.
+    patterns:
+      - pattern-either:
+          - pattern: Runtime.getRuntime().exec("..." + ...)
+          - pattern: Runtime.getRuntime().exec("...".concat(...))
+
+  - id: cmdi-java-processbuilder-command
+    languages: [java]
+    severity: ERROR
+    message: ProcessBuilder with single string command (split) may allow injection.
+    metadata:
+      category: Command Injection
+      severity_label: HIGH
+      cwe: "CWE-78"
+      suggested_fix: Pass each argument as separate element in the list.
+    patterns:
+      - pattern-either:
+          - pattern: new ProcessBuilder("..." + ...)
+          - pattern: new ProcessBuilder("...".concat(...))
+
+  - id: cmdi-cs-process-start
+    languages: [csharp]
+    severity: ERROR
+    message: Process.Start() with concatenated arguments can lead to injection.
+    metadata:
+      category: Command Injection
+      severity_label: CRITICAL
+      cwe: "CWE-78"
+      suggested_fix: Use ProcessStartInfo with ArgumentList to separate args.
+    patterns:
+      - pattern-either:
+          - pattern: Process.Start("..." + ..., ...)
+          - pattern: Process.Start($"...", ...)
+
+  - id: cmdi-go-exec-command
+    languages: [go]
+    severity: ERROR
+    message: exec.Command() with concatenated string allows shell injection.
+    metadata:
+      category: Command Injection
+      severity_label: CRITICAL
+      cwe: "CWE-78"
+      suggested_fix: Use exec.Command with separate arguments (not a single string).
+    patterns:
+      - pattern-either:
+          - pattern: exec.Command("..." + ...)
+          - pattern: exec.Command(fmt.Sprintf(...), ...)
+
+  - id: cmdi-php-shell-funcs
+    languages: [php]
+    severity: ERROR
+    message: A shell-executing function is called with a value derived directly from request input.
+    metadata:
+      category: Command Injection
+      severity_label: CRITICAL
+      cwe: "CWE-78"
+      suggested_fix: Avoid passing request-derived data to shell functions.
+    patterns:
+      - pattern-either:
+          - pattern: shell_exec($_GET[...])
+          - pattern: shell_exec($_POST[...])
+          - pattern: shell_exec($_REQUEST[...])
+          - pattern: system($_GET[...])
+          - pattern: system($_POST[...])
+          - pattern: system($_REQUEST[...])
+          - pattern: passthru($_GET[...])
+          - pattern: passthru($_POST[...])
+          - pattern: passthru($_REQUEST[...])
+          - pattern: exec($_GET[...])
+          - pattern: exec($_POST[...])
+          - pattern: exec($_REQUEST[...])
+
+  # ────────────────────────────────────────────────────────────────────────────
+  # 4. PATH TRAVERSAL
+  # ────────────────────────────────────────────────────────────────────────────
+
+  - id: path-traversal-python-open
+    languages: [python]
+    severity: ERROR
+    message: open() with user-controlled file path allows path traversal.
+    metadata:
+      category: Path Traversal
+      severity_label: HIGH
+      cwe: "CWE-22"
+      suggested_fix: Sanitize path (e.g., os.path.basename, allowlist).
+    patterns:
+      - pattern-either:
+          - pattern: open($X, ...)
+          - pattern: file($X, ...)
+      - metavariable-regex:
+          metavariable: $X
+          regex: '^(request\.|input\(|sys\.argv)'
+
+  - id: path-traversal-js-fs
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: fs.readFile() with user-controlled path can lead to path traversal.
+    metadata:
+      category: Path Traversal
+      severity_label: HIGH
+      cwe: "CWE-22"
+      suggested_fix: Use path.basename or resolve within a restricted root.
+    patterns:
+      - pattern-either:
+          - pattern: fs.readFile(req.query.path, ...)
+          - pattern: fs.readFileSync(req.query.path, ...)
+          - pattern: fs.writeFile(req.body.path, ...)
+
+  - id: path-traversal-java-file
+    languages: [java]
+    severity: ERROR
+    message: FileInputStream/File constructed from a variable path allows path traversal if the value is user-controlled.
+    metadata:
+      category: Path Traversal
+      severity_label: HIGH
+      cwe: "CWE-22"
+      suggested_fix: Use Path.getFileName() or restrict to a safe directory.
+    patterns:
+      - pattern-either:
+          - pattern: new FileInputStream($X)
+          - pattern: new File($X)
+      - metavariable-pattern:
+          metavariable: $X
+          patterns:
+            - pattern-not: "\"...\""
+
+  # ────────────────────────────────────────────────────────────────────────────
+  # 5. WEAK CRYPTOGRAPHY
+  # ────────────────────────────────────────────────────────────────────────────
+
+  - id: crypto-md5
+    languages: [python, javascript, typescript, java, csharp, go]
+    severity: WARNING
+    message: MD5 is cryptographically broken – unsafe for security.
+    metadata:
+      category: Weak Cryptography
+      severity_label: MEDIUM
+      cwe: "CWE-327"
+      suggested_fix: Use SHA-256 or bcrypt/argon2 for passwords.
+    # FIXED (this validation pass): `ruby` was in this rule's `languages:`
+    # list alongside its `Digest::MD5.hexdigest(...)` pattern below, but a
+    # multi-language rule's patterns must each parse as valid syntax in
+    # EVERY declared language, not just the one they're "meant" for —
+    # Ruby's `::` scope-resolution operator isn't valid Python/JS/Java/C#/Go
+    # syntax, so the whole rule failed to load (0 rules, not just this one
+    # skipped). Split the Ruby case into its own single-language rule
+    # below instead of cramming it into this one.
+    patterns:
+      - pattern-either:
+          - pattern: hashlib.md5(...)
+          - pattern: crypto.createHash("md5")
+          - pattern: MessageDigest.getInstance("MD5")
+          - pattern: MD5.Create()
+          - pattern: md5.New()
+
+  - id: crypto-md5-ruby
+    languages: [ruby]
+    severity: WARNING
+    message: MD5 is cryptographically broken – unsafe for security.
+    metadata:
+      category: Weak Cryptography
+      severity_label: MEDIUM
+      cwe: "CWE-327"
+      suggested_fix: Use SHA-256 or bcrypt/argon2 for passwords.
+    pattern: Digest::MD5.hexdigest(...)
+
+  - id: crypto-sha1
+    languages: [python, javascript, typescript, java, csharp, go]
+    severity: INFO
+    message: SHA-1 has known collision weaknesses – deprecated.
+    metadata:
+      category: Weak Cryptography
+      severity_label: LOW
+      cwe: "CWE-327"
+      suggested_fix: Use SHA-256 or better.
+    # Same fix as crypto-md5 above: Ruby's `::` broke this multi-language
+    # rule's parse for every declared language, not just Ruby.
+    patterns:
+      - pattern-either:
+          - pattern: hashlib.sha1(...)
+          - pattern: crypto.createHash("sha1")
+          - pattern: MessageDigest.getInstance("SHA-1")
+          - pattern: SHA1.Create()
+          - pattern: sha1.New()
+
+  - id: crypto-sha1-ruby
+    languages: [ruby]
+    severity: INFO
+    message: SHA-1 has known collision weaknesses – deprecated.
+    metadata:
+      category: Weak Cryptography
+      severity_label: LOW
+      cwe: "CWE-327"
+      suggested_fix: Use SHA-256 or better.
+    pattern: Digest::SHA1.hexdigest(...)
+
+  - id: crypto-des
+    languages: [python, java, csharp, go]
+    severity: ERROR
+    message: DES/3DES use weak 56-bit key – broken.
+    metadata:
+      category: Weak Cryptography
+      severity_label: HIGH
+      cwe: "CWE-327"
+      suggested_fix: Use AES-256-GCM.
+    # FIXED (this validation pass): Semgrep does NOT treat "..." inside a
+    # string literal as a wildcard — `Cipher.getInstance("DES/...")` only
+    # ever matches the literal 3-character text "..." after "DES/", so it
+    # silently never fired against real code like
+    # `Cipher.getInstance("DES/ECB/PKCS5Padding")`. Swapped both
+    # string-prefix checks for pattern-regex (regex IS allowed as a
+    # pattern-either alternative alongside pattern:).
+    patterns:
+      - pattern-either:
+          - pattern: DES.new(...)
+          - pattern: DES3.new(...)
+          - pattern-regex: 'Cipher\.getInstance\(\s*"(DES|DESede)/'
+          - pattern: TripleDES.Create()
+          - pattern: des.NewCipher(...)
+
+  - id: crypto-ecb-mode
+    languages: [python, java, csharp]
+    severity: ERROR
+    message: ECB mode leaks structural info – insecure.
+    metadata:
+      category: Weak Cryptography
+      severity_label: HIGH
+      cwe: "CWE-327"
+      suggested_fix: Use GCM or CBC with random IV.
+    # FIXED (this validation pass): same "..." inside a string-literal
+    # issue as crypto-des above — `Cipher.getInstance(".../ECB/...")`
+    # never matched real code. Swapped for pattern-regex.
+    patterns:
+      - pattern-either:
+          - pattern: $CIPHER.new(..., $MODULE.MODE_ECB, ...)
+          - pattern-regex: 'Cipher\.getInstance\(\s*"[^"]*/ECB/'
+          - pattern: CipherMode.ECB
+
+  - id: crypto-ecb-mode-go
+    languages: [generic]
+    paths:
+      include:
+        - "*.go"
+    severity: ERROR
+    message: Use of an ECB-mode cipher wrapper – ECB leaks structural info and is insecure.
+    metadata:
+      category: Weak Cryptography
+      severity_label: HIGH
+      cwe: "CWE-327"
+      suggested_fix: Use cipher.NewGCM or CBC with a random IV instead.
+    # NOTE: the original rule matched bare `cipher.NewCipher(...)`, which is
+    # the generic block-cipher constructor used by GCM and CBC alike, so it
+    # would flag legitimate, secure code. Go's standard library has no
+    # built-in ECB mode; ECB usage there comes from third-party wrapper
+    # functions, which this regex targets instead.
+    pattern-regex: '(?i)NewECB(Encrypter|Decrypter)'
+
+  - id: crypto-cbc-no-iv
+    languages: [python, java, csharp]
+    severity: WARNING
+    message: CBC mode is used here – verify a fresh, random IV (never zero/null/reused) is supplied for every encryption.
+    metadata:
+      category: Weak Cryptography
+      severity_label: MEDIUM
+      cwe: "CWE-329"
+      suggested_fix: Use a random IV for each encryption (e.g., os.urandom(16)).
+    # NOTE: the original rule referenced metavariable-regex on $IV, but no
+    # $IV metavariable appeared anywhere in the patterns below, which Semgrep
+    # rejects as an invalid rule. These patterns can't see the IV argument at
+    # all (it's supplied elsewhere), so the constraint is dropped and the
+    # rule is scoped to "flag CBC usage for manual IV review" instead.
+    patterns:
+      - pattern-either:
+          - pattern: AES.new(..., AES.MODE_CBC, ...)
+          - pattern: Cipher.getInstance("AES/CBC/PKCS5Padding")
+
+  - id: crypto-rc4
+    languages: [python, java, csharp, go, javascript]
+    severity: ERROR
+    message: RC4 is broken – multiple biases discovered.
+    metadata:
+      category: Weak Cryptography
+      severity_label: HIGH
+      cwe: "CWE-327"
+      suggested_fix: Use AES-GCM.
+    # FIXED (this validation pass): `go` was declared in `languages:` but
+    # no pattern here actually matched Go's real RC4 API
+    # (`crypto/rc4`'s `rc4.NewCipher(key)`) — Go was listed with zero
+    # real coverage. Added the missing pattern.
+    patterns:
+      - pattern-either:
+          - pattern: ARC4.new(...)
+          - pattern: Cipher.getInstance("RC4")
+          - pattern: RC4.Create()
+          - pattern: crypto.createCipheriv("rc4", ...)
+          - pattern: rc4.NewCipher(...)
+
+  - id: crypto-rsa-small-key
+    languages: [python, java, csharp, go]
+    severity: ERROR
+    message: RSA key size < 2048 bits is considered insecure.
+    metadata:
+      category: Weak Cryptography
+      severity_label: HIGH
+      cwe: "CWE-326"
+      suggested_fix: Use 2048-bit or larger RSA key.
+    # `(?i)` already makes the match case-insensitive, so the `rsa|RSA`
+    # alternation in the original was redundant.
+    pattern-regex: '(?i)rsa.*?(1024|512|768|key_size\s*=\s*(1024|512|768))'
+
+  - id: crypto-weak-random-python
+    languages: [python]
+    severity: WARNING
+    message: random.random()/randint() is predictable – not for tokens/secrets.
+    metadata:
+      category: Weak Cryptography
+      severity_label: MEDIUM
+      cwe: "CWE-330"
+      suggested_fix: Use secrets.token_bytes() or os.urandom().
+    pattern-regex: '(?i)(random\.(random|randint|choice|uniform)).{0,50}(token|password|secret|key|apikey)'
+
+  - id: crypto-weak-random-java
+    severity: WARNING
+    message: java.util.Random is used near security-sensitive naming (token/password/secret/key) – predictable; use SecureRandom instead.
+    metadata:
+      category: Weak Cryptography
+      severity_label: MEDIUM
+      cwe: "CWE-330"
+      suggested_fix: Use SecureRandom.getInstanceStrong().
+    # NOTE: the original rule's metavariable-regex referenced $X, which
+    # never appeared in either pattern (`new Random()` / `Random.nextInt()`
+    # bind no such metavariable) — an invalid rule. A context-sensitive
+    # check needs `pattern-inside`/`pattern-regex` over the surrounding
+    # code, not a metavariable constraint, so this is rewritten as a
+    # regex scoped to Java files that looks for Random usage near
+    # security-sensitive naming within the same line/vicinity.
+    #
+    # FIXED (this validation pass): the `languages: [java]` key above and
+    # this rule's `languages: [generic]` were both present — Semgrep
+    # rejects a rule with a duplicate top-level key outright (0 rules
+    # loaded, not just this one skipped). Since this rule is regex-based
+    # and needs `paths: include` to scope it to *.java, `generic` is the
+    # only valid value here — removed the stray `languages: [java]` line.
+    languages: [generic]
+    paths:
+      include:
+        - "*.java"
+    # FIXED (this validation pass): as `A|B`, the `new\s+Random\(\)`
+    # branch was unconditional — it fired on every `new Random()`
+    # regardless of context, contradicting the rule's own message
+    # ("used near security-sensitive naming"). Both branches now require
+    # a security-sensitive word within the same 80-char window, matching
+    # what the message actually claims and what crypto-weak-random-python/
+    # -go already do correctly.
+    pattern-regex: '(?i)(new\s+Random\(\)|Random\s*\.\s*nextInt\([^)]*\)).{0,80}(token|password|secret|key)'
+
+  - id: crypto-weak-random-go
+    languages: [go]
+    severity: WARNING
+    message: math/rand is predictable – use crypto/rand for security.
+    metadata:
+      category: Weak Cryptography
+      severity_label: MEDIUM
+      cwe: "CWE-330"
+      suggested_fix: Use rand.Read from crypto/rand.
+    pattern-regex: '(?i)rand\.(Intn|Int|Float64).{0,50}(token|password|secret|key)'
+
+  # ────────────────────────────────────────────────────────────────────────────
+  # 6. HARDCODED SECRETS
+  # ────────────────────────────────────────────────────────────────────────────
+
+  - id: secret-aws-key
+    languages: [generic]
+    severity: ERROR
+    message: AWS Access Key ID hardcoded.
+    metadata:
+      category: Hardcoded Secret
+      severity_label: CRITICAL
+      cwe: "CWE-798"
+      suggested_fix: Revoke and use environment vars.
+    pattern-regex: 'AKIA[0-9A-Z]{16}'
+
+  - id: secret-generic-assignment
+    languages: [generic]
+    severity: ERROR
+    message: Variable named like a secret assigned literal.
+    metadata:
+      category: Hardcoded Secret
+      severity_label: CRITICAL
+      cwe: "CWE-798"
+      suggested_fix: Move to env var/secret manager.
+    pattern-regex: '(?i)\b(api[_-]?key|secret[_-]?key|client[_-]?secret|password|passwd|access[_-]?token)\s*[:=]\s*["''][A-Za-z0-9_\-/+=]{8,}["'']'
+
+  - id: secret-private-key-block
+    languages: [generic]
+    severity: ERROR
+    message: PEM private key block present.
+    metadata:
+      category: Hardcoded Secret
+      severity_label: CRITICAL
+      cwe: "CWE-798"
+      suggested_fix: Remove and rotate.
+    pattern-regex: '-----BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY-----'
+
+  - id: secret-slack-token
+    languages: [generic]
+    severity: ERROR
+    message: Slack token hardcoded.
+    metadata:
+      category: Hardcoded Secret
+      severity_label: HIGH
+      cwe: "CWE-798"
+      suggested_fix: Revoke and use env var.
+    pattern-regex: 'xox[baprs]-[0-9A-Za-z\-]{10,}'
+
+  - id: secret-github-token
+    languages: [generic]
+    severity: ERROR
+    message: GitHub personal access token / OAuth token hardcoded.
+    metadata:
+      category: Hardcoded Secret
+      severity_label: CRITICAL
+      cwe: "CWE-798"
+      suggested_fix: Revoke and use GitHub Actions secrets or env var.
+    pattern-regex: 'gh[pousr]_[0-9A-Za-z]{36,}'
+
+  - id: secret-gitlab-token
+    languages: [generic]
+    severity: ERROR
+    message: GitLab personal/private token hardcoded.
+    metadata:
+      category: Hardcoded Secret
+      severity_label: CRITICAL
+      cwe: "CWE-798"
+      suggested_fix: Revoke and use CI/CD variable or env.
+    pattern-regex: 'glpat-[0-9A-Za-z\-_]{20,}'
+
+  - id: secret-stripe-key
+    languages: [generic]
+    severity: ERROR
+    message: Stripe API key (sk_live/rk_live) hardcoded.
+    metadata:
+      category: Hardcoded Secret
+      severity_label: CRITICAL
+      cwe: "CWE-798"
+      suggested_fix: Revoke and use environment variable.
+    pattern-regex: '(sk_live|rk_live)_[0-9A-Za-z]{24,}'
+
+  - id: secret-high-entropy-base64
+    languages: [generic]
+    severity: WARNING
+    message: High-entropy base64 string found – may be a hardcoded secret.
+    metadata:
+      category: Hardcoded Secret
+      severity_label: MEDIUM
+      cwe: "CWE-798"
+      suggested_fix: Verify if this is a secret; if so, move to env.
+    pattern-regex: '(?i)(secret|key|token|credential)\s*[:=]\s*["'']([A-Za-z0-9+/]{40,}={0,2})["'']'
+
+  - id: secret-high-entropy-hex
+    languages: [generic]
+    severity: WARNING
+    message: Long hex string (32+ chars) assigned to secret-like variable.
+    metadata:
+      category: Hardcoded Secret
+      severity_label: MEDIUM
+      cwe: "CWE-798"
+      suggested_fix: If this is a secret, move to env.
+    pattern-regex: '(?i)(api[_-]?key|token|secret)\s*[:=]\s*["'']([0-9a-f]{32,})["'']'
+
+  # ────────────────────────────────────────────────────────────────────────────
+  # 7. NOSQL INJECTION
+  # ────────────────────────────────────────────────────────────────────────────
+
+  - id: nosqli-mongodb-js-operator
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: User-controlled input concatenated into MongoDB query object – NoSQL injection.
+    metadata:
+      category: NoSQL Injection
+      severity_label: HIGH
+      cwe: "CWE-943"
+      suggested_fix: Use type-checking/sanitization; avoid constructing operators from input.
+    patterns:
+      - pattern-either:
+          - pattern: '$COL.find({ $where: "..." + ... })'
+          - pattern: '$COL.find({ $where: `...${$X}...` })'
+
+  - id: nosqli-mongodb-py
+    languages: [python]
+    severity: ERROR
+    message: MongoDB query with dict key from user input may allow NoSQL injection.
+    metadata:
+      category: NoSQL Injection
+      severity_label: HIGH
+      cwe: "CWE-943"
+      suggested_fix: Validate/sanitize keys; use strict schema.
+    patterns:
+      - pattern-either:
+          - pattern: '$DB.find({ $X: ... })'
+          - pattern: '$DB.find_one({ $X: ... })'
+      - metavariable-regex:
+          metavariable: $X
+          regex: '^(request\.|input\(|\$)'
+
+  # ────────────────────────────────────────────────────────────────────────────
+  # 8. LOG FORGING
+  # ────────────────────────────────────────────────────────────────────────────
+
+  - id: log-forging-python
+    languages: [python]
+    severity: INFO
+    message: Logging user-controlled input directly can enable log forging (CRLF injection).
+    metadata:
+      category: Log Forging
+      severity_label: LOW
+      cwe: "CWE-117"
+      suggested_fix: Sanitize newlines and CR before logging (e.g., replace \n).
+    patterns:
+      - pattern-either:
+          - pattern: logging.info(request.GET.get(...))
+          - pattern: logging.warning(request.POST.get(...))
+
+  - id: log-forging-js
+    languages: [javascript, typescript]
+    severity: INFO
+    message: Logging raw user input (req.body) may allow log injection.
+    metadata:
+      category: Log Forging
+      severity_label: LOW
+      cwe: "CWE-117"
+      suggested_fix: Sanitize or encode user data before logging.
+    patterns:
+      - pattern-either:
+          - pattern: console.log(req.body)
+          - pattern: console.log(req.query)
+
+  # ────────────────────────────────────────────────────────────────────────────
+  # 9. INSECURE DESERIALIZATION
+  # ────────────────────────────────────────────────────────────────────────────
+
+  - id: insecure-deserialization-python-pickle
+    languages: [python]
+    severity: ERROR
+    message: pickle.loads() on user-controlled data can lead to RCE.
+    metadata:
+      category: Insecure Deserialization
+      severity_label: CRITICAL
+      cwe: "CWE-502"
+      suggested_fix: Avoid pickle; use JSON or restrict with safe alternatives.
+    patterns:
+      - pattern-either:
+          - pattern: pickle.loads(request.GET.get(...))
+          - pattern: pickle.loads(request.POST.get(...))
+          - pattern: pickle.loads(input(...))
+
+  - id: insecure-deserialization-java
+    languages: [java]
+    severity: ERROR
+    message: ObjectInputStream.readObject() on user input is dangerous (RCE).
+    metadata:
+      category: Insecure Deserialization
+      severity_label: CRITICAL
+      cwe: "CWE-502"
+      suggested_fix: Avoid serialization of untrusted data; use JSON or validate.
+    pattern: new ObjectInputStream(...).readObject()
