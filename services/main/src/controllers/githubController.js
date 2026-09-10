@@ -12,6 +12,17 @@ const { sanitizeReturnTo } = require('../utils/safeRedirect');
 const env = require('../config/env');
 const logger = require('../config/logger');
 
+// Strips raw HTML / huge payloads out of error messages before they get
+// URL-encoded into a redirect. A Supabase 521/503 can return the full
+// Cloudflare error page as err.message — we never want that in a browser URL.
+function sanitizeError(err) {
+  const msg = (err && (err.message || String(err))) || 'oauth_failed';
+  // Looks like an HTML document — replace with a generic backend message
+  if (msg.trimStart().startsWith('<')) return 'backend_unavailable';
+  // Truncate anything suspiciously long
+  return msg.length > 120 ? msg.slice(0, 120) : msg;
+}
+
 function assertConfigured() {
   if (!githubConfig.isConfigured()) {
     const err = new Error('GitHub OAuth is not configured (GITHUB_CLIENT_ID / GITHUB_CLIENT_SECRET / GITHUB_REDIRECT_URI)');
@@ -77,8 +88,7 @@ async function oauthCallback(req, res, next) {
     return res.redirect(`${env.frontendUrl}${returnTo}${separator}connected=true&provider=github`);
   } catch (err) {
     logger.error({ err }, 'GitHub OAuth callback failed');
-    const msg = err.message || 'oauth_failed';
-    return res.redirect(`${env.frontendUrl}/github?error=${encodeURIComponent(msg)}`);
+    return res.redirect(`${env.frontendUrl}/github?error=${encodeURIComponent(sanitizeError(err))}`);
   }
 }
 
@@ -174,8 +184,7 @@ async function appInstallCallback(req, res, next) {
     return res.redirect(`${env.frontendUrl}${returnTo}${separator}connected=true&provider=github`);
   } catch (err) {
     logger.error({ err }, 'GitHub App install callback failed');
-    const msg = err.message || 'install_failed';
-    return res.redirect(`${env.frontendUrl}/github?error=${encodeURIComponent(msg)}`);
+    return res.redirect(`${env.frontendUrl}/github?error=${encodeURIComponent(sanitizeError(err))}`);
   }
 }
 

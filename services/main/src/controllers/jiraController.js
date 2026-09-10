@@ -7,6 +7,15 @@ const { sanitizeReturnTo } = require('../utils/safeRedirect');
 const env = require('../config/env');
 const logger = require('../config/logger');
 
+// Strips raw HTML / huge payloads out of error messages before they get
+// URL-encoded into a redirect. A Supabase 521/503 returns the full
+// Cloudflare error page as err.message — we never want that in a browser URL.
+function sanitizeError(err) {
+  const msg = (err && (err.message || String(err))) || 'oauth_failed';
+  if (msg.trimStart().startsWith('<')) return 'backend_unavailable';
+  return msg.length > 120 ? msg.slice(0, 120) : msg;
+}
+
 function assertConfigured(req) {
   if (!jiraConfig.isConfigured()) {
     const err = new Error('Jira OAuth is not configured (JIRA_CLIENT_ID / JIRA_CLIENT_SECRET / JIRA_REDIRECT_URI / JIRA_PROJECT_KEY)');
@@ -85,8 +94,7 @@ async function oauthCallback(req, res, next) {
     return res.redirect(`${env.frontendUrl}${returnTo}${separator}connected=true&provider=jira`);
   } catch (err) {
     logger.error({ err }, 'Jira OAuth callback failed');
-    const msg = err.message || 'oauth_failed';
-    return res.redirect(`${env.frontendUrl}/jira?error=${encodeURIComponent(msg)}`);
+    return res.redirect(`${env.frontendUrl}/jira?error=${encodeURIComponent(sanitizeError(err))}`);
   }
 }
 
