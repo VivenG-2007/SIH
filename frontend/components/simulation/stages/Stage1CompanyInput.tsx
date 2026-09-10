@@ -87,14 +87,32 @@ export default function Stage1CompanyInput({
     } else if (clean.endsWith('k') || clean.endsWith('thousand')) {
       multiplier = 1000;
       numStr = clean.replace(/thousand|k/g, '').trim();
-    } else if (unit === 'lakh') {
-      multiplier = currency === 'INR' ? 100000 : 1000;
+    } else {
+      const rawNum = parseFloat(clean);
+      // Intelligently detect if user typed a raw currency amount without suffix
+      // (e.g. 999900, 50000, 1000000) - NEVER multiply raw amounts >= 1000 by 100,000!
+      if (!isNaN(rawNum) && rawNum >= 1000) {
+        multiplier = 1;
+        numStr = clean;
+      } else if (unit === 'lakh') {
+        multiplier = currency === 'INR' ? 100000 : 1000;
+      }
     }
 
     const parsed = parseFloat(numStr);
     if (isNaN(parsed) || parsed <= 0) return null;
-    return Math.round(parsed * multiplier);
+    const finalVal = Math.round(parsed * multiplier);
+    return Math.min(100000000, Math.max(10000, finalVal));
   };
+
+  // Auto-correct any corrupt / legacy ultra-high budget from previous multiplier issues
+  useEffect(() => {
+    if (company.annualSecurityBudget > 100000000) {
+      const fixed = 1000000;
+      onChangeCompany({ ...company, annualSecurityBudget: fixed });
+      setBudgetText(company.currency === 'INR' ? '10' : '100');
+    }
+  }, []);
 
   // Sync text only when the user is NOT actively typing inside the input
   useEffect(() => {
@@ -113,8 +131,7 @@ export default function Stage1CompanyInput({
   const handleBudgetChange = (text: string) => {
     setBudgetText(text);
     const parsed = parseBudget(text, company.currency, budgetUnit);
-    const minThreshold = company.currency === 'INR' ? 50000 : 5000;
-    if (parsed !== null && parsed >= minThreshold) {
+    if (parsed !== null && parsed >= 10000) {
       onChangeCompany({ ...company, annualSecurityBudget: parsed });
     }
   };
@@ -122,15 +139,18 @@ export default function Stage1CompanyInput({
   const handleBudgetBlur = () => {
     setIsBudgetFocused(false);
     const parsed = parseBudget(budgetText, company.currency, budgetUnit);
-    const minThreshold = company.currency === 'INR' ? 50000 : 5000;
-    if (parsed !== null && parsed >= minThreshold) {
+    if (parsed !== null && parsed >= 10000) {
       onChangeCompany({ ...company, annualSecurityBudget: parsed });
     } else {
       // Revert to valid company budget
+      const safeBudget = company.annualSecurityBudget > 100000000 ? 1000000 : company.annualSecurityBudget;
       const resetVal = budgetUnit === 'lakh'
-        ? (company.currency === 'INR' ? (company.annualSecurityBudget / 100000).toString() : (company.annualSecurityBudget / 1000).toString())
-        : company.annualSecurityBudget.toLocaleString(company.currency === 'INR' ? 'en-IN' : 'en-US');
+        ? (company.currency === 'INR' ? (safeBudget / 100000).toString() : (safeBudget / 1000).toString())
+        : safeBudget.toLocaleString(company.currency === 'INR' ? 'en-IN' : 'en-US');
       setBudgetText(resetVal);
+      if (company.annualSecurityBudget > 100000000) {
+        onChangeCompany({ ...company, annualSecurityBudget: safeBudget });
+      }
     }
   };
 
@@ -376,14 +396,23 @@ export default function Stage1CompanyInput({
               <div className="flex justify-between text-[10px] font-mono text-slate-400">
                 <span>{company.currency === 'INR' ? '₹1L' : '$10k'}</span>
                 <span className="text-cyan-400 font-semibold">Interactive Budget Slider</span>
-                <span>{company.currency === 'INR' ? '₹50L' : '$500k'}</span>
+                <span>
+                  {company.currency === 'INR'
+                    ? company.annualSecurityBudget > 5000000
+                      ? `₹${(Math.max(10000000, company.annualSecurityBudget) / 10000000).toFixed(1)}Cr`
+                      : '₹50L'
+                    : '$500k'}
+                </span>
               </div>
               <input
                 type="range"
                 min={company.currency === 'INR' ? 100000 : 10000}
-                max={company.currency === 'INR' ? 5000000 : 500000}
+                max={Math.max(company.currency === 'INR' ? 5000000 : 500000, company.annualSecurityBudget)}
                 step={company.currency === 'INR' ? 50000 : 5000}
-                value={company.annualSecurityBudget}
+                value={Math.min(
+                  Math.max(company.annualSecurityBudget, company.currency === 'INR' ? 100000 : 10000),
+                  Math.max(company.currency === 'INR' ? 5000000 : 500000, company.annualSecurityBudget)
+                )}
                 onChange={(e) => {
                   const val = Number(e.target.value);
                   setIsBudgetFocused(false);
@@ -472,7 +501,7 @@ export default function Stage1CompanyInput({
                 <span className="text-slate-500 text-[10px]">Presets:</span>
                 {company.currency === 'INR' ? (
                   <>
-                    {[500000, 1000000, 1500000, 2000000, 2500000, 3500000].map((amt) => {
+                    {[500000, 999900, 1000000, 1500000, 2500000, 5000000].map((amt) => {
                       const isSel = company.annualSecurityBudget === amt;
                       return (
                         <button
@@ -488,7 +517,7 @@ export default function Stage1CompanyInput({
                               : 'bg-slate-850 hover:bg-slate-800 border border-slate-700 text-slate-300'
                           }`}
                         >
-                          ₹{amt / 100000}L
+                          {amt === 999900 ? '₹9.99L' : `₹${amt / 100000}L`}
                         </button>
                       );
                     })}

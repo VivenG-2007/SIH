@@ -58,11 +58,17 @@ async def chat(messages: list[dict], model: str | None = None) -> dict:
         deployment=deployment,
     )
 
-    async with httpx.AsyncClient(timeout=60) as client:
-        response = await client.post(url, headers=headers, json=payload)
+    is_codex = "codex" in deployment.lower()
+    
+    # Codex models or non-chat completion deployments use the Foundry Responses API
+    if not is_codex:
+        async with httpx.AsyncClient(timeout=60) as client:
+            response = await client.post(url, headers=headers, json=payload)
+    else:
+        response = None
 
-    # If deployment endpoint returns 404, try Foundry Responses API fallback
-    if response.status_code == 404:
+    # If deployment endpoint returns 400 (unsupported) or 404 (not found), or is codex, try Foundry Responses API
+    if is_codex or (response is not None and response.status_code in (400, 404)):
         responses_url = f"{base}/openai/v1/responses"
         system_content = ""
         turns: list[dict] = []
@@ -90,6 +96,11 @@ async def chat(messages: list[dict], model: str | None = None) -> dict:
                         if content:
                             break
                 return {"content": content, "usage": data_f.get("usage", {})}
+            elif is_codex:
+                raise HTTPException(
+                    status_code=502,
+                    detail=f"Azure OpenAI Codex error {resp_foundry.status_code}: {resp_foundry.text}",
+                )
 
     if response.status_code >= 400:
         raise HTTPException(

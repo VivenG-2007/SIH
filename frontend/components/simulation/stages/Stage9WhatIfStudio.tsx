@@ -192,9 +192,11 @@ export default function Stage9WhatIfStudio({
                   onFocus={() => setIsBudgetFocused(true)}
                   onBlur={() => {
                     setIsBudgetFocused(false);
-                    const val = parseFloat(hypoBudgetText.replace(/,/g, ''));
-                    if (!isNaN(val) && val >= 1) {
-                      setHypoBudget(Math.round(isINR ? val * 100000 : val * 1000));
+                    const clean = hypoBudgetText.replace(/,/g, '').trim().toLowerCase();
+                    const raw = parseFloat(clean);
+                    if (!isNaN(raw) && raw > 0) {
+                      const finalBudget = raw >= 1000 ? Math.round(raw) : Math.round(isINR ? raw * 100000 : raw * 1000);
+                      setHypoBudget(finalBudget);
                     } else {
                       setHypoBudgetText(isINR ? (hypoBudget / 100000).toString() : (hypoBudget / 1000).toString());
                     }
@@ -206,9 +208,11 @@ export default function Stage9WhatIfStudio({
                   }}
                   onChange={(e) => {
                     setHypoBudgetText(e.target.value);
-                    const val = parseFloat(e.target.value.replace(/,/g, ''));
-                    if (!isNaN(val) && val >= 1) {
-                      setHypoBudget(Math.round(isINR ? val * 100000 : val * 1000));
+                    const clean = e.target.value.replace(/,/g, '').trim().toLowerCase();
+                    const raw = parseFloat(clean);
+                    if (!isNaN(raw) && raw > 0) {
+                      const finalBudget = raw >= 1000 ? Math.round(raw) : Math.round(isINR ? raw * 100000 : raw * 1000);
+                      setHypoBudget(finalBudget);
                     }
                   }}
                   className="w-24 pl-5 pr-6 py-0.5 rounded bg-slate-950 border border-slate-700 text-cyan-300 font-mono text-xs font-bold focus:outline-none focus:border-cyan-500 text-right"
@@ -225,9 +229,9 @@ export default function Stage9WhatIfStudio({
           <input
             type="range"
             min={isINR ? 100000 : 10000}
-            max={isINR ? 5000000 : 500000}
+            max={Math.max(isINR ? 5000000 : 500000, hypoBudget)}
             step={isINR ? 50000 : 5000}
-            value={hypoBudget}
+            value={Math.min(Math.max(hypoBudget, isINR ? 100000 : 10000), Math.max(isINR ? 5000000 : 500000, hypoBudget))}
             onChange={(e) => {
               setIsBudgetFocused(false);
               setHypoBudget(Number(e.target.value));

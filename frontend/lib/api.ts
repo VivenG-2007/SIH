@@ -30,7 +30,18 @@ export const riskApi = {
     criticality: number;
     severity_counts: Record<string, number>;
     active_control_keys: string[];
+    narrate_with_ai?: boolean;
+    model_mode?: string;
   }) => mainApi.post('/api/proxy/api/v1/risk/quick-assessment', payload),
+  nlpQuery: (payload: {
+    query: string;
+    industry?: string;
+    criticality?: number;
+    total_eal_usd?: number;
+    total_var95_usd?: number;
+    severity_counts?: Record<string, number>;
+    active_controls?: string[];
+  }) => mainApi.post('/api/proxy/api/v1/risk/nlp-query', payload),
   optimizeInvestment: (payload: {
     budget_usd: number;
     options: {
@@ -216,7 +227,7 @@ authApi.interceptors.response.use(
   async (error) => {
     const original = error.config;
     const isRefreshCall = typeof original?.url === 'string' && original.url.includes('/api/auth/refresh');
-    if (error.response?.status === 401 && !original._retry && !isRefreshCall) {
+    if (error.response?.status === 401 && !original?._retry && !isRefreshCall) {
       original._retry = true;
       try {
         refreshing = refreshing || authApi.post('/api/auth/refresh');
@@ -228,7 +239,19 @@ authApi.interceptors.response.use(
         return Promise.reject(refreshErr);
       }
     }
-    if (typeof window !== 'undefined' && error.response?.status) {
+
+    const isAuthProbe =
+      isRefreshCall ||
+      (typeof original?.url === 'string' &&
+        (original.url.includes('/api/auth/refresh') ||
+          original.url.includes('/api/auth/me') ||
+          original.url.includes('/api/auth/session')));
+
+    if (
+      typeof window !== 'undefined' &&
+      error.response?.status &&
+      !(error.response.status === 401 && isAuthProbe)
+    ) {
       console.error(
         `[authApi Error ${error.response.status}] ${error.config?.method?.toUpperCase()} ${error.config?.url}:`,
         error.response.data || error.message

@@ -36,6 +36,7 @@ import {
   CartesianGrid,
 } from 'recharts';
 import { riskApi } from '@/lib/api';
+import FloatingNlpPanel from '@/components/assessment/FloatingNlpPanel';
 
 // ---------------------------------------------------------------------------
 // Data Contracts & Types
@@ -210,13 +211,25 @@ const INDUSTRIES = [
 const USD_TO_INR = 83.25;
 
 export default function RiskCommandCenter() {
-  // ── Executive Scope Inputs ──
   const [industry, setIndustry] = useState('financial_services');
   const [budgetUsd, setBudgetUsd] = useState(120000);
   const [currency, setCurrency] = useState<'INR' | 'USD'>('INR');
+  const [budgetText, setBudgetText] = useState<string>(() =>
+    Math.round(120000 * USD_TO_INR).toString()
+  );
+  const [isBudgetFocused, setIsBudgetFocused] = useState(false);
   const [activeAsset, setActiveAsset] = useState('acme/payments-api');
   const [appliedControlKeys, setAppliedControlKeys] = useState<string[]>([]);
   const [threatInjected, setThreatInjected] = useState(false);
+  const [nlpPanelOpen, setNlpPanelOpen] = useState(false);
+
+  // Sync budgetText when currency or budgetUsd changes externally
+  useEffect(() => {
+    if (!isBudgetFocused) {
+      const val = currency === 'INR' ? Math.round(budgetUsd * USD_TO_INR) : Math.round(budgetUsd);
+      setBudgetText(val.toString());
+    }
+  }, [currency, budgetUsd, isBudgetFocused]);
 
   // ── Ingestion & Persistent Store State (Stage 1) ──
   const [events, setEvents] = useState<TelemetryEventItem[]>([]);
@@ -316,10 +329,10 @@ export default function RiskCommandCenter() {
       setTimeout(() => setPipelineStepMessage('4. Simulating 10,000 FAIR Monte Carlo iterations...'), 2000);
 
       const { data } = await riskApi.evaluatePipeline({
-        industry,
-        budget_usd: budgetUsd,
-        asset_id: activeAsset,
-        applied_control_keys: appliedControlKeys,
+        industry: industry || 'financial_services',
+        budget_usd: Math.round(budgetUsd || 120000),
+        asset_id: activeAsset || 'acme/payments-api',
+        applied_control_keys: appliedControlKeys || [],
         cvss_score: threatInjected ? 9.8 : 8.2,
         mode: 'simulation',
         scrape_evidence: true,
@@ -398,8 +411,14 @@ export default function RiskCommandCenter() {
     label: pt.label,
   })) ?? [];
 
-  const eal = state?.financial_exposure?.expected_annual_loss_usd ?? 0;
-  const var95 = state?.financial_exposure?.value_at_risk_95_usd ?? 0;
+  const eal =
+    state?.financial_exposure?.expected_annual_loss_usd ??
+    state?.fair_monte_carlo?.simulated_eal_usd ??
+    0;
+  const var95 =
+    state?.financial_exposure?.value_at_risk_95_usd ??
+    state?.fair_monte_carlo?.percentiles_usd?.p95 ??
+    0;
   const riskScore = state?.risk_score ?? 85;
 
   return (
@@ -434,6 +453,20 @@ export default function RiskCommandCenter() {
           </div>
 
           <div className="flex items-center gap-2.5 flex-wrap">
+            {/* Ask Groq AI NLP Assistant */}
+            <button
+              type="button"
+              onClick={() => setNlpPanelOpen((prev) => !prev)}
+              className="px-3 py-1.5 rounded-xl border border-purple-500/50 bg-gradient-to-r from-purple-950/70 to-indigo-950/70 hover:from-purple-900/80 hover:to-indigo-900/80 text-xs font-mono text-purple-200 hover:text-white hover:border-purple-400 transition-all flex items-center gap-1.5 shadow-md shadow-purple-950/40"
+              title="Open NLP Cyber Risk Co-Pilot"
+            >
+              <Sparkles className="w-3.5 h-3.5 text-amber-400 animate-pulse" />
+              <span>Ask Groq AI</span>
+              <span className="text-[10px] font-mono px-1.5 py-0.2 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30">
+                ⚡ &lt;100ms
+              </span>
+            </button>
+
             {/* Currency Switcher */}
             <button
               type="button"
@@ -498,18 +531,133 @@ export default function RiskCommandCenter() {
           </div>
 
           <div>
-            <label className="block text-[11px] font-mono text-zinc-400 uppercase tracking-wider mb-1.5 font-semibold">
-              3. Security Capital Budget ({currency === 'INR' ? '₹' : '$'})
-            </label>
-            <input
-              type="number"
-              value={currency === 'INR' ? Math.round(budgetUsd * USD_TO_INR) : budgetUsd}
-              onChange={(e) => {
-                const val = Number(e.target.value);
-                setBudgetUsd(currency === 'INR' ? Math.round(val / USD_TO_INR) : val);
-              }}
-              className="w-full bg-[#171324] border border-[#2F2740] rounded-xl px-3 py-2 text-sm text-white font-mono focus:outline-none focus:border-purple-500"
-            />
+            <div className="flex items-center justify-between mb-1.5">
+              <label className="block text-[11px] font-mono text-zinc-400 uppercase tracking-wider font-semibold">
+                3. Security Capital Budget ({currency === 'INR' ? '₹' : '$'})
+              </label>
+              <span className="text-[11px] font-mono text-emerald-400 font-semibold">
+                {formatMoney(budgetUsd)}
+              </span>
+            </div>
+            <div className="relative">
+              <span className="absolute left-3 top-2 text-sm text-zinc-500 font-mono font-bold">
+                {currency === 'INR' ? '₹' : '$'}
+              </span>
+              <input
+                type="text"
+                value={budgetText}
+                onFocus={() => setIsBudgetFocused(true)}
+                onBlur={() => {
+                  setIsBudgetFocused(false);
+                  const clean = budgetText.replace(/,/g, '').trim();
+                  const num = parseFloat(clean);
+                  if (!isNaN(num) && num > 0) {
+                    const usd = currency === 'INR' ? num / USD_TO_INR : num;
+                    setBudgetUsd(usd);
+                    setBudgetText(Math.round(num).toString());
+                  } else {
+                    const fallback = 120000;
+                    setBudgetUsd(fallback);
+                    setBudgetText(currency === 'INR' ? Math.round(fallback * USD_TO_INR).toString() : fallback.toString());
+                  }
+                }}
+                onChange={(e) => {
+                  const valStr = e.target.value;
+                  setBudgetText(valStr);
+                  const clean = valStr.replace(/,/g, '').trim();
+                  const num = parseFloat(clean);
+                  if (!isNaN(num) && num > 0) {
+                    const usd = currency === 'INR' ? num / USD_TO_INR : num;
+                    setBudgetUsd(usd);
+                  }
+                }}
+                className="w-full bg-[#171324] border border-[#2F2740] rounded-xl pl-8 pr-3 py-2 text-sm text-white font-mono focus:outline-none focus:border-purple-500"
+                placeholder={currency === 'INR' ? 'e.g. 1000000 or 999900' : 'e.g. 120000'}
+              />
+            </div>
+            <div className="flex items-center gap-1.5 mt-2 flex-wrap">
+              <span className="text-[10px] text-zinc-500 font-mono">Quick:</span>
+              {(currency === 'INR'
+                ? [
+                    { label: '₹10L', inr: 1000000 },
+                    { label: '₹25L', inr: 2500000 },
+                    { label: '₹50L', inr: 5000000 },
+                    { label: '₹1Cr', inr: 10000000 },
+                  ]
+                : [
+                    { label: '$50k', usd: 50000 },
+                    { label: '$120k', usd: 120000 },
+                    { label: '$250k', usd: 250000 },
+                    { label: '$500k', usd: 500000 },
+                  ]
+              ).map((preset) => {
+                const targetUsd = 'inr' in preset ? preset.inr / USD_TO_INR : (preset as any).usd;
+                return (
+                  <button
+                    key={preset.label}
+                    type="button"
+                    onClick={() => {
+                      setIsBudgetFocused(false);
+                      setBudgetUsd(targetUsd);
+                      setBudgetText(
+                        currency === 'INR'
+                          ? Math.round(targetUsd * USD_TO_INR).toString()
+                          : Math.round(targetUsd).toString()
+                      );
+                    }}
+                    className="px-2 py-0.5 rounded bg-[#1f1a30] hover:bg-[#2c2444] border border-[#3b3252] text-[10px] font-mono text-zinc-300 transition"
+                  >
+                    {preset.label}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+
+        {/* ── Active Mitigations / Security Controls Toggles ── */}
+        <div className="pt-3.5 border-t border-[#221C30] mt-4 space-y-2">
+          <div className="flex items-center justify-between">
+            <span className="text-[11px] font-mono text-zinc-400 uppercase tracking-wider font-semibold flex items-center gap-1.5">
+              <Shield className="w-3.5 h-3.5 text-purple-400" />
+              4. Active Mitigations / Applied Controls ({appliedControlKeys.length} Selected)
+            </span>
+            <span className="text-[10px] font-mono text-zinc-500">
+              Click any control to toggle deployment &amp; recalculate exposure
+            </span>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            {[
+              { key: 'mfa_credential_attacks', label: 'Adaptive FIDO2 MFA', costUsd: 18000, desc: '-65% Phishing' },
+              { key: 'edr_endpoint_detection', label: 'Managed EDR & XDR', costUsd: 32000, desc: '-45% Malware' },
+              { key: 'network_segmentation', label: 'Zero-Trust Microsegmentation', costUsd: 45000, desc: '-70% Lateral' },
+              { key: 'waf', label: 'Cloud WAF & DDoS Shield', costUsd: 15000, desc: '-80% Injection' },
+              { key: 'critical_patch_sla_7d', label: '7-Day Critical Patch SLA', costUsd: 25000, desc: '-55% KEV' },
+            ].map((c) => {
+              const isActive = appliedControlKeys.includes(c.key);
+              return (
+                <button
+                  key={c.key}
+                  type="button"
+                  onClick={() => {
+                    setAppliedControlKeys((prev) =>
+                      prev.includes(c.key) ? prev.filter((k) => k !== c.key) : [...prev, c.key]
+                    );
+                  }}
+                  className={`px-3 py-1.5 rounded-xl border text-xs font-mono transition-all flex items-center gap-2 ${
+                    isActive
+                      ? 'bg-emerald-950/90 border-emerald-500 text-emerald-300 font-bold shadow-md shadow-emerald-950/40'
+                      : 'bg-[#181426] border-[#312842] text-zinc-400 hover:text-zinc-200 hover:border-zinc-600'
+                  }`}
+                >
+                  <span className={`w-2 h-2 rounded-full ${isActive ? 'bg-emerald-400' : 'bg-zinc-600'}`} />
+                  <span>{c.label}</span>
+                  <span className={`text-[10px] ${isActive ? 'text-emerald-400' : 'text-zinc-500'}`}>
+                    ({formatMoney(c.costUsd)})
+                  </span>
+                </button>
+              );
+            })}
           </div>
         </div>
       </div>
@@ -1086,33 +1234,59 @@ export default function RiskCommandCenter() {
 
               <div className="text-right font-mono text-xs">
                 <span className="text-zinc-400">Investment / Budget: </span>
-                <span className="text-white font-bold">{formatMoney(state.optimizer?.total_cost_usd ?? 0)} / {formatMoney(budgetUsd)}</span>
+                <span className="text-white font-bold">
+                  {formatMoney(state.optimizer?.total_cost_usd ?? state.alternative_portfolios?.[0]?.total_cost_usd ?? 0)} / {formatMoney(budgetUsd)}
+                </span>
               </div>
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
-              {state.optimizer?.selected_controls?.map((c) => (
-                <div key={c.key} className="p-4 rounded-2xl bg-[#161224] border border-emerald-900/40 flex items-center justify-between gap-3">
-                  <div>
-                    <div className="text-xs font-bold text-white flex items-center gap-1.5">
-                      <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
-                      {c.label}
+              {(state.optimizer?.selected_controls ?? state.alternative_portfolios?.[0]?.selected_controls)?.map((c: any) => {
+                const label = typeof c === 'string' ? c : c.label;
+                const cost = typeof c === 'object' && c.cost_usd ? c.cost_usd : 0;
+                const reduction = typeof c === 'object' && c.risk_reduction_usd ? c.risk_reduction_usd : 0;
+                const source = typeof c === 'object' && c.evidence_source ? c.evidence_source : 'Knapsack DP Solver';
+                return (
+                  <div key={label} className="p-4 rounded-2xl bg-[#161224] border border-emerald-900/40 flex items-center justify-between gap-3">
+                    <div>
+                      <div className="text-xs font-bold text-white flex items-center gap-1.5">
+                        <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                        {label}
+                      </div>
+                      <div className="text-[10px] font-mono text-zinc-400 mt-1">
+                        Evidence: <span className="text-purple-300">{source}</span>
+                      </div>
                     </div>
-                    <div className="text-[10px] font-mono text-zinc-400 mt-1">
-                      Evidence: <span className="text-purple-300">{c.evidence_source}</span>
-                    </div>
-                  </div>
 
-                  <div className="text-right font-mono text-xs shrink-0">
-                    <div className="text-white font-bold">{formatMoney(c.cost_usd)}</div>
-                    <div className="text-emerald-400 font-bold text-[11px]">+{formatMoney(c.risk_reduction_usd)} Red</div>
+                    <div className="text-right font-mono text-xs shrink-0">
+                      {cost > 0 && <div className="text-white font-bold">{formatMoney(cost)}</div>}
+                      {reduction > 0 && <div className="text-emerald-400 font-bold text-[11px]">+{formatMoney(reduction)} Red</div>}
+                    </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           </div>
         </div>
       )}
+
+      {/* ── Floating NLP Risk Co-Pilot (Powered by Groq ⚡) ── */}
+      <FloatingNlpPanel
+        industry={industry}
+        criticality={state?.business_context?.criticality_score ?? 0.92}
+        totalEalUsd={eal || 412000}
+        totalVar95Usd={var95 || 940000}
+        counts={{
+          CRITICAL: events.filter((e) => e.severity === 'CRITICAL').length,
+          HIGH: events.filter((e) => e.severity === 'HIGH').length,
+          MEDIUM: events.filter((e) => e.severity === 'MEDIUM').length,
+          LOW: 0,
+        }}
+        activeControls={appliedControlKeys}
+        activeAsset={activeAsset}
+        externalOpen={nlpPanelOpen}
+        onOpenChange={setNlpPanelOpen}
+      />
     </div>
   );
 }

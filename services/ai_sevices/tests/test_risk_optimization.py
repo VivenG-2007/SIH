@@ -157,6 +157,16 @@ def test_rosi_net_return_and_portfolio_rosi():
     assert abs(result.total_rosi - 3.0) < 1e-6
 
 
+def test_optimizer_float_budget_handling():
+    mfa = opt.InvestmentOption(key="mfa", label="MFA", cost_usd=50_000, risk_reduction_usd=250_000)
+    edr = opt.InvestmentOption(key="edr", label="EDR", cost_usd=50_000, risk_reduction_usd=150_000)
+    # Float budget like 120000.0 from JSON request
+    result, trail = opt.optimize_investment([mfa, edr], budget_usd=120000.0)
+    assert len(result.selected) == 2
+    assert result.budget_usd == 120000
+    assert "120,000" in trail.explanation
+
+
 if __name__ == "__main__":
     for name, func in list(globals().items()):
         if name.startswith("test_") and callable(func):

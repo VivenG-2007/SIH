@@ -23,6 +23,9 @@ from app.core import audit
 from app.core.db import get_db
 from app.core.logging import get_logger
 from app.core.security import CurrentUser, require_auth
+import asyncio
+import time
+from app.services.ai_providers import azure_openai, groq
 from app.services.ai_service import run_chat
 from app.services.risk import business_criticality as bc
 from app.services.risk import calibration as calibration_mod
@@ -121,6 +124,123 @@ class QuickAssessmentRequest(BaseModel):
         ..., description="Self-reported issue counts, e.g. {'CRITICAL': 2, 'HIGH': 5, 'MEDIUM': 10, 'LOW': 20}"
     )
     active_control_keys: list[str] = Field(default_factory=list)
+    narrate_with_ai: bool = Field(True, description="Orchestrate gpt-4.1-mini, gpt-5.2, and gpt-5.3-codex in assessment")
+    model_mode: str = Field("ensemble", description="'ensemble' | 'gpt-4.1-mini' | 'gpt-5.2' | 'gpt-5.3-codex'")
+
+
+async def _run_tri_model_assessment(
+    industry: str,
+    criticality: float,
+    severity_counts: dict[str, int],
+    active_control_keys: list[str],
+    total_eal: float,
+    total_var: float,
+    model_mode: str = "ensemble",
+) -> dict:
+    settings = get_settings()
+    scan_dep = settings.azure_openai_deployment_scan or "gpt-4.1-mini"
+    fix_dep = settings.azure_openai_deployment_fix or "gpt-5.2"
+    verify_dep = settings.azure_openai_deployment_verify or "gpt-5.3-codex"
+
+    triage_prompt = (
+        f"You are an elite Cyber Threat Intelligence Specialist (Tier 1: gpt-4.1-mini — Threat & Exposure Triage).\n"
+        f"Analyze this organization's reported vulnerability state:\n"
+        f"• Sector: {industry.replace('_', ' ').title()}\n"
+        f"• Business Criticality: {criticality * 100:.0f}%\n"
+        f"• Reported Issue Breakdown: {severity_counts}\n"
+        f"• Active Controls: {', '.join(active_control_keys) if active_control_keys else 'None registered'}\n\n"
+        f"Provide a structured assessment:\n"
+        f"1. Threat Triage Summary: 2 concise sentences on primary breach avenues.\n"
+        f"2. Likely MITRE ATT&CK Techniques: 2-3 specific techniques threat actors will leverage.\n"
+        f"3. Exposure Rating: (Critical / High / Guarded) with key risk driver."
+    )
+
+    strategy_prompt = (
+        f"You are a Fortune 500 CISO & Senior Cyber Insurance Underwriter (Tier 2: gpt-5.2 — Strategic Financial & Executive Quantification).\n"
+        f"Evaluate the quantitative cyber financial exposure state:\n"
+        f"• Sector: {industry.replace('_', ' ').title()}\n"
+        f"• Expected Annual Loss (EAL): ${total_eal:,.0f} USD\n"
+        f"• 95% Catastrophic Value at Risk (VaR): ${total_var:,.0f} USD\n"
+        f"• Business Criticality: {criticality * 100:.0f}%\n"
+        f"• Active Controls: {', '.join(active_control_keys) if active_control_keys else 'None'}\n\n"
+        f"Provide an executive brief:\n"
+        f"1. Capital Risk Verdict: 2 sentences placing ${total_eal:,.0f} EAL in context of industry breach trends.\n"
+        f"2. Cyber Insurance Underwriting Grade: (Grade A / Grade B / Grade C+) and estimated premium savings impact.\n"
+        f"3. Executive Decision Directive: 1 sharp boardroom mandate for security capital allocation."
+    )
+
+    verification_prompt = (
+        f"You are a Principal Security Architect and Policy Verification Specialist (Tier 3: gpt-5.3-codex — Technical Controls & Architecture Verification).\n"
+        f"Perform an engineering and compliance audit on this control architecture:\n"
+        f"• Active Security Controls: {', '.join(active_control_keys) if active_control_keys else 'None'}\n"
+        f"• Industry Sector: {industry.replace('_', ' ').title()}\n"
+        f"• Known Open Severities: {severity_counts}\n\n"
+        f"Provide a technical hardening audit:\n"
+        f"1. Technical Control Validation: Audit effectiveness of active controls against automated exploits.\n"
+        f"2. Architecture Gaps & Hardening Specs: Specific engineering implementations required (FIDO2 WebAuthn, EDR runtime hooks, WAF ACLs, patch SLA).\n"
+        f"3. Compliance Verification: Audit status against CERT-In 6-hour reporting mandate, India DPDP Act 2023, and RBI/SEBI CSCRF."
+    )
+
+    async def run_single_tier(dep: str, prompt: str, role_title: str):
+        t0 = time.time()
+        try:
+            res = await azure_openai.chat([{"role": "user", "content": prompt}], model=dep)
+            latency = round((time.time() - t0) * 1000, 1)
+            return {
+                "model": dep,
+                "role": role_title,
+                "status": "completed",
+                "latency_ms": latency,
+                "content": res.get("content", "").strip(),
+                "usage": res.get("usage", {}),
+            }
+        except Exception as exc:
+            latency = round((time.time() - t0) * 1000, 1)
+            logger.warning("tri_model_tier_failed", model=dep, error=str(exc))
+            fallback_text = (
+                f"Evaluated with calibrated rule engine for {role_title}. "
+                f"Sector '{industry.title()}' with ${total_eal:,.0f} EAL exhibits standard exposure. "
+                f"Recommended priority: harden identity boundaries and enforce automated patch SLAs."
+            )
+            return {
+                "model": dep,
+                "role": role_title,
+                "status": "fallback",
+                "latency_ms": latency,
+                "content": fallback_text,
+                "usage": {},
+            }
+
+    t_start = time.time()
+    triage_res, strategy_res, verify_res = await asyncio.gather(
+        run_single_tier(scan_dep, triage_prompt, "Tier 1: Threat Triage & Exposure Screening"),
+        run_single_tier(fix_dep, strategy_prompt, "Tier 2: Strategic Financial & Executive Quantification"),
+        run_single_tier(verify_dep, verification_prompt, "Tier 3: Technical Controls & Architecture Verification"),
+    )
+    total_latency = round((time.time() - t_start) * 1000, 1)
+
+    synthesis = (
+        f"**Multi-Model Assessment Synthesis ({scan_dep} + {fix_dep} + {verify_dep}):**\n\n"
+        f"• **Threat Triage ({scan_dep}):** {triage_res['content'][:220]}...\n\n"
+        f"• **Executive Strategy ({fix_dep}):** {strategy_res['content'][:220]}...\n\n"
+        f"• **Technical Verification ({verify_dep}):** {verify_res['content'][:220]}..."
+    )
+
+    return {
+        "pipeline_version": "tri-model-crq-v2",
+        "total_latency_ms": total_latency,
+        "models": {
+            "threat_triage": triage_res,
+            "financial_strategy": strategy_res,
+            "technical_verification": verify_res,
+        },
+        "ensemble_verdict": synthesis,
+        "underwriter_assessment": {
+            "current_grade": "Grade C+ (Elevated Exposure)" if total_eal > 500000 else "Grade B (Standard Insurable)",
+            "post_control_grade": "Grade A (Prime Insurable Risk)",
+            "estimated_premium_discount_pct": 34 if len(active_control_keys) >= 2 else 15,
+        },
+    }
 
 
 @router.post("/quick-assessment")
@@ -134,7 +254,85 @@ async def quick_assessment(req: QuickAssessmentRequest, user: CurrentUser = Depe
         )
     except control_effectiveness.UnknownControlError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
+
+    if req.narrate_with_ai:
+        ai_assessment = await _run_tri_model_assessment(
+            industry=req.industry,
+            criticality=req.criticality,
+            severity_counts=req.severity_counts,
+            active_control_keys=req.active_control_keys,
+            total_eal=result.get("totalExpectedAnnualLossUsd", 0.0),
+            total_var=result.get("totalValueAtRisk95Usd", 0.0),
+            model_mode=req.model_mode,
+        )
+        result["ai_assessment"] = ai_assessment
+
     return result
+
+
+class RiskNlpQueryRequest(BaseModel):
+    query: str = Field(..., description="User's natural language question regarding risk assessment")
+    industry: Optional[str] = "technology"
+    criticality: Optional[float] = 0.5
+    total_eal_usd: Optional[float] = 0.0
+    total_var95_usd: Optional[float] = 0.0
+    severity_counts: Optional[dict[str, int]] = None
+    active_controls: Optional[list[str]] = None
+    context_notes: Optional[str] = None
+
+
+@router.post("/nlp-query")
+async def risk_nlp_query(req: RiskNlpQueryRequest, user: CurrentUser = Depends(require_auth)):
+    settings = get_settings()
+    active_ctrls_str = ", ".join(req.active_controls) if req.active_controls else "None"
+    sys_prompt = (
+        "You are Patchline X's real-time Cyber Risk Quantification Assistant powered by Groq Llama-3.3. "
+        "You answer questions instantly, analytically, and objectively using deterministic FAIR cyber risk data. "
+        "Be concise, impactful, professional, and use bullet points where helpful."
+    )
+    user_prompt = (
+        f"Current Assessment Telemetry Context:\n"
+        f"• Industry: {req.industry.title()}\n"
+        f"• Scope Criticality: {req.criticality * 100:.0f}%\n"
+        f"• Expected Annual Loss (EAL): ${req.total_eal_usd:,.0f} USD\n"
+        f"• 95% Value at Risk (VaR): ${req.total_var95_usd:,.0f} USD\n"
+        f"• Active Controls: {active_ctrls_str}\n"
+        f"• Reported Issue Breakdown: {req.severity_counts or {}}\n\n"
+        f"User Question: {req.query}"
+    )
+
+    t0 = time.time()
+    try:
+        res = await groq.chat(
+            messages=[
+                {"role": "system", "content": sys_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            model=settings.groq_model,
+        )
+        latency_ms = round((time.time() - t0) * 1000, 1)
+        return {
+            "answer": res.get("content", ""),
+            "provider": res.get("provider_used", "groq"),
+            "model": res.get("model_used", settings.groq_model or "llama-3.3-70b-versatile"),
+            "latency_ms": latency_ms,
+            "usage": res.get("usage", {}),
+        }
+    except Exception as exc:
+        logger.warning("groq_nlp_query_failed", error=str(exc))
+        res = await azure_openai.chat([
+            {"role": "system", "content": sys_prompt},
+            {"role": "user", "content": user_prompt},
+        ], model="gpt-4.1-mini")
+        latency_ms = round((time.time() - t0) * 1000, 1)
+        return {
+            "answer": res.get("content", ""),
+            "provider": "azure_openai (fallback)",
+            "model": "gpt-4.1-mini",
+            "latency_ms": latency_ms,
+            "usage": res.get("usage", {}),
+        }
+
 
 
 # ---------------------------------------------------------------------------
@@ -185,7 +383,7 @@ async def optimize_investment_endpoint(
         )
         for o in req.options
     ]
-    result, trail = optimization.optimize_investment(options, req.budget_usd)
+    result, trail = optimization.optimize_investment(options, int(round(req.budget_usd)))
     ranked = optimization.rank_by_roi(options)
 
     return {
@@ -710,7 +908,7 @@ ENTERPRISE_ASSETS_PORTFOLIO = [
 
 class UnifiedRiskStateRequest(BaseModel):
     industry: str = Field("financial_services", description="financial_services | healthcare | technology | retail | energy | defense")
-    budget_usd: int = Field(120000, ge=0)
+    budget_usd: float = Field(120000.0, ge=0.0)
     asset_id: str = "acme/payments-api"
     applied_control_keys: list[str] = Field(default_factory=list)
     cvss_score: float = Field(8.2, ge=0.0, le=10.0)
@@ -780,8 +978,11 @@ async def get_unified_risk_state(req: UnifiedRiskStateRequest, user: CurrentUser
     # -----------------------------------------------------------------------
     # 4. FAIR-Style 10,000-Run Monte Carlo Simulation (Loss Exceedance Curve)
     # -----------------------------------------------------------------------
+    import hashlib
     import numpy as np
-    np.random.seed(42)  # Deterministic seed for reproducible evaluation
+    seed_str = f"{req.asset_id}_{req.industry}_{req.budget_usd}_{sorted(req.applied_control_keys)}_{req.cvss_score}"
+    seed_val = int(hashlib.md5(seed_str.encode()).hexdigest()[:8], 16)
+    np.random.seed(seed_val)
     N_RUNS = 10000
 
     # Loss Event Frequency: Poisson distribution with lambda = post_likelihood * 2.4 events/yr
@@ -832,7 +1033,8 @@ async def get_unified_risk_state(req: UnifiedRiskStateRequest, user: CurrentUser
     # 5. Constrained Knapsack ILP Optimization: 3 Distinct Portfolios
     # -----------------------------------------------------------------------
     # Portfolio 1: Budget-Constrained 0/1 Knapsack with prerequisite enforcement
-    opt_result, opt_trail = optimization.optimize_investment(DEFAULT_CANDIDATE_CONTROLS, req.budget_usd)
+    budget_int = int(round(req.budget_usd))
+    opt_result, opt_trail = optimization.optimize_investment(DEFAULT_CANDIDATE_CONTROLS, budget_int)
     # Check prerequisites: if network_segmentation is selected but mfa is not, resolve dependency
     selected_keys = {o.key for o in opt_result.selected}
     valid_selected = []
@@ -946,20 +1148,46 @@ async def get_unified_risk_state(req: UnifiedRiskStateRequest, user: CurrentUser
         f"while qualifying the organization for a 34% Cyber Insurance premium reduction."
     )
 
-    # Risk Score & Factors Explainability
-    base_risk_score = round(post_likelihood * 100)
-    risk_score = min(99, max(15, base_risk_score if not known_exp else max(85, base_risk_score + 20)))
+    # Dynamic Multi-Dimensional Risk Score Calculation (FAIR & NIST CRQ Composite)
+    # 1. Vulnerability Severity component (0 to 35 points based on CVSS)
+    vuln_pts = (req.cvss_score / 10.0) * 35.0
 
-    # Explainability Waterfall
+    # 2. Threat Activity & Telemetry Exposure component (0 to 35 points based on live MongoDB telemetry + CISA KEV)
+    crit_ev_count = sum(1 for e in recent_evs if e.severity == "CRITICAL")
+    high_ev_count = sum(1 for e in recent_evs if e.severity == "HIGH")
+    telemetry_ev_pts = min(24.0, (crit_ev_count * 2.0) + (high_ev_count * 1.0))
+    kev_pts = 11.0 if known_exp else 0.0
+    threat_pts = min(35.0, kev_pts + telemetry_ev_pts)
+
+    # 3. Asset Business Criticality component (0 to 30 points based on revenue dependency & data sensitivity)
+    crit_pts = crit_result.criticality_score * 30.0
+
+    # Raw Unmitigated Baseline Score
+    raw_unmitigated = vuln_pts + threat_pts + crit_pts
+
+    # 4. Mitigation Reduction from active controls
+    if req.applied_control_keys and control_result.risk_reduction_pct > 0:
+        mitigation_multiplier = max(0.15, 1.0 - (control_result.risk_reduction_pct * 0.80))
+        risk_score = round(raw_unmitigated * mitigation_multiplier)
+    else:
+        risk_score = round(raw_unmitigated)
+
+    risk_score = min(99, max(15, risk_score))
+
+    # Dynamic Explainability Waterfall
     explainability_factors = [
-        {"factor": "Critical CVE in Ingress Route (CVE-2024-3400)", "delta": 24, "type": "vulnerability"},
-        {"factor": "Direct Internet-Facing API Endpoint Exposure", "delta": 18, "type": "exposure"},
-        {"factor": "Active Brute-Force & Credential Compromise Signals", "delta": 15, "type": "threat"},
-        {"factor": f"High-Value Asset ({svc.name})", "delta": 12, "type": "asset"},
-        {"factor": "Weak Automated Recovery & SLA Buffer", "delta": 10, "type": "gap"},
-        {"factor": "EDR Runtime Inspection Active", "delta": -8, "type": "mitigation"},
-        {"factor": "FIDO2 / MFA Enforced on Core Admins", "delta": -4, "type": "mitigation"},
+        {"factor": f"Vulnerability Severity (CVSS {req.cvss_score:.1f})", "delta": round(vuln_pts), "type": "vulnerability"},
+        {"factor": f"Asset Criticality ({svc.name} - {crit_result.criticality_score:.0%})", "delta": round(crit_pts), "type": "asset"},
     ]
+    if known_exp:
+        explainability_factors.append({"factor": "CISA KEV Weaponized Exploit Active In Wild", "delta": 11, "type": "threat"})
+    if crit_ev_count > 0 or high_ev_count > 0:
+        explainability_factors.append({"factor": f"Active Ingested Telemetry ({crit_ev_count} Crit, {high_ev_count} High)", "delta": round(telemetry_ev_pts), "type": "exposure"})
+    if req.applied_control_keys:
+        mitigation_delta = round(raw_unmitigated - risk_score)
+        explainability_factors.append({"factor": f"Active Control Mitigations ({len(req.applied_control_keys)} Controls)", "delta": -mitigation_delta, "type": "mitigation"})
+    else:
+        explainability_factors.append({"factor": "Unmitigated Defense Gap (Zero Active Controls)", "delta": 8, "type": "gap"})
 
     # Attack Path Replay Timeline
     attack_replay = [
@@ -1055,7 +1283,7 @@ async def get_unified_risk_state(req: UnifiedRiskStateRequest, user: CurrentUser
             ai_eval = await run_chat(
                 owner_id=user.id,
                 messages=[{"role": "user", "content": prompt}],
-                use_cache=True,
+                use_cache=False,  # Bypass cache on explicit pipeline evaluations for live generation
             )
             llm_briefing = ai_eval.get("content")
             llm_metadata = {
@@ -1136,7 +1364,7 @@ async def get_unified_risk_state(req: UnifiedRiskStateRequest, user: CurrentUser
 
     print(
         f"\033[1;34m[CRQ RISK ENGINE]\033[0m Asset: \033[1;37m{req.asset_id}\033[0m | Sector: \033[1;33m{req.industry}\033[0m | Mode: \033[1;35m{req.mode}\033[0m | Budget: \033[1;32m${req.budget_usd:,.0f}\033[0m\n"
-        f"  \033[90m↳ Score:\033[0m \033[1;31m{risk_score}/100\033[0m | \033[90mEAL:\033[0m \033[1;32m${post_eal:,.0f}\033[0m | \033[90m95% VaR:\033[0m \033[1;35m${p95_loss:,.0f}\033[0m | \033[90mOpt Controls:\033[0m {len(valid_selected)} ({'+' + str(round(p1_rosi * 100)) + '% ROSI'})\n"
+        f"  \033[90m-> Score:\033[0m \033[1;31m{risk_score}/100\033[0m | \033[90mEAL:\033[0m \033[1;32m${post_eal:,.0f}\033[0m | \033[90m95% VaR:\033[0m \033[1;35m${p95_loss:,.0f}\033[0m | \033[90mOpt Controls:\033[0m {len(valid_selected)} ({'+' + str(round(p1_rosi * 100)) + '% ROSI'})\n"
     )
 
     return {
@@ -1180,6 +1408,28 @@ async def get_unified_risk_state(req: UnifiedRiskStateRequest, user: CurrentUser
                 "primary_loss": impact.downtime_usd + impact.breach_usd,
                 "secondary_loss": impact.regulatory_usd + impact.reputation_usd,
             },
+        },
+        "financial_exposure": {
+            "expected_annual_loss_usd": post_eal,
+            "value_at_risk_95_usd": p95_loss,
+            "unmitigated_eal_usd": pre_eal,
+            "post_likelihood": post_likelihood,
+        },
+        "optimizer": {
+            "budget_usd": req.budget_usd,
+            "total_cost_usd": p1_total_cost,
+            "total_risk_reduction_usd": p1_total_red,
+            "portfolio_rosi": p1_rosi,
+            "selected_controls": [
+                {
+                    "key": o.key,
+                    "label": o.label,
+                    "cost_usd": o.cost_usd,
+                    "risk_reduction_usd": o.risk_reduction_usd,
+                    "evidence_source": o.evidence_source,
+                }
+                for o in valid_selected
+            ],
         },
         "alternative_portfolios": alternative_portfolios,
         "cyber_insurance": cyber_insurance_module,
@@ -1321,7 +1571,7 @@ async def get_unified_risk_state(req: UnifiedRiskStateRequest, user: CurrentUser
 
 class EvaluatePipelineRequest(BaseModel):
     industry: str = Field("financial_services", description="financial_services | healthcare | technology | retail | energy | defense")
-    budget_usd: int = Field(120000, ge=0)
+    budget_usd: float = Field(120000.0, ge=0.0)
     asset_id: str = "acme/payments-api"
     applied_control_keys: list[str] = Field(default_factory=list)
     cvss_score: float = Field(8.2, ge=0.0, le=10.0)

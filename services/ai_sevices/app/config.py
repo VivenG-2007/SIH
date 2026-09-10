@@ -62,6 +62,10 @@ class Settings(BaseSettings):
     azure_openai_deployment_verify: str = ""  # codex-5.3
     azure_openai_embedding_deployment: str = "text-embedding-3-small"
 
+    # ── Groq API Configuration (High-speed NLP Questions) ──
+    groq_api_key: str = ""
+    groq_model: str = "llama-3.3-70b-versatile"
+
     # ── Embedding Provider (RAG memory & semantic search) ──
     # Supports: "openrouter" (free embedding models), "mock", "azure_openai"
     embedding_provider: str = "openrouter"

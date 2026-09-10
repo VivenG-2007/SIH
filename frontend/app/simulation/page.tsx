@@ -222,17 +222,30 @@ function SimulationPageInner() {
         </div>
 
         <div>
-          <label className="text-xs font-mono text-text-muted block mb-2">
-            Budget ({formatLakh(budget)})
-          </label>
+          <div className="flex items-center justify-between mb-2">
+            <label className="text-xs font-mono text-text-muted block">
+              Budget ({formatLakh(budget)})
+            </label>
+            <div className="flex items-center gap-1.5">
+              <span className="text-xs text-text-muted font-mono">₹</span>
+              <input
+                type="number"
+                min={0}
+                max={100_000_000}
+                value={budget}
+                onChange={(e) => setBudget(Math.max(0, Number(e.target.value)))}
+                className="w-28 bg-bg-elevated border border-border-default rounded px-2 py-0.5 text-xs text-text-primary font-mono text-right"
+              />
+            </div>
+          </div>
           <input
-            type="range" min={0} max={2_500_000} step={10_000}
+            type="range" min={0} max={Math.max(2_500_000, budget)} step={10_000}
             value={budget}
             onChange={(e) => setBudget(Number(e.target.value))}
             className="w-full"
           />
           <div className="flex justify-between text-[10px] text-text-muted font-mono mt-1">
-            <span>₹0</span><span>₹25L</span>
+            <span>₹0</span><span>{formatLakh(Math.max(2_500_000, budget))}</span>
           </div>
         </div>
 

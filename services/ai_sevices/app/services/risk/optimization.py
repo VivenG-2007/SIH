@@ -124,7 +124,7 @@ class OptimizationResult:
 
 def optimize_investment(
     options: list[InvestmentOption],
-    budget_usd: int,
+    budget_usd: int | float,
 ) -> tuple[OptimizationResult, EvidenceTrail]:
     """Exact 0/1 knapsack via dynamic programming over integer-dollar cost
     buckets. O(n * budget) time/space — budget is assumed in whole
@@ -139,16 +139,18 @@ def optimize_investment(
             raise ValueError(f"Investment '{opt.key}' has a negative cost or reduction")
 
     n = len(options)
-    B = budget_usd
+    B = int(round(budget_usd))
     # dp[i][b] = best achievable risk reduction using the first i options
     # within budget b.
     dp = [[0] * (B + 1) for _ in range(n + 1)]
     for i in range(1, n + 1):
         opt = options[i - 1]
+        cost = int(round(opt.cost_usd))
+        red = int(round(opt.risk_reduction_usd))
         for b in range(B + 1):
             without = dp[i - 1][b]
-            if opt.cost_usd <= b:
-                with_it = dp[i - 1][b - opt.cost_usd] + opt.risk_reduction_usd
+            if cost <= b:
+                with_it = dp[i - 1][b - cost] + red
                 dp[i][b] = max(without, with_it)
             else:
                 dp[i][b] = without
@@ -160,7 +162,7 @@ def optimize_investment(
         if dp[i][b] != dp[i - 1][b]:
             opt = options[i - 1]
             selected.append(opt)
-            b -= opt.cost_usd
+            b -= int(round(opt.cost_usd))
     selected.reverse()
 
     total_cost = sum(o.cost_usd for o in selected)
@@ -170,8 +172,8 @@ def optimize_investment(
         selected=selected,
         total_cost_usd=total_cost,
         total_risk_reduction_usd=total_reduction,
-        budget_usd=budget_usd,
-        budget_utilization_pct=(total_cost / budget_usd) if budget_usd else 0.0,
+        budget_usd=B,
+        budget_utilization_pct=(total_cost / B) if B else 0.0,
     )
 
     unevidenced = [o.key for o in options if o.confidence == "unspecified" or o.evidence_source == "unspecified"]

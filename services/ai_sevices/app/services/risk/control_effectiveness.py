@@ -44,8 +44,29 @@ class UnknownControlError(ValueError):
     than quietly contributing 0 risk reduction to a real EAL figure."""
 
 
+CONTROL_KEY_ALIASES: dict[str, str] = {
+    "mfa": "mfa_credential_attacks",
+    "fido2": "mfa_credential_attacks",
+    "fido2_mfa": "mfa_credential_attacks",
+    "edr": "edr_endpoint_detection",
+    "xdr": "edr_endpoint_detection",
+    "managed_edr": "edr_endpoint_detection",
+    "microsegmentation": "network_segmentation",
+    "segmentation": "network_segmentation",
+    "patch_sla": "critical_patch_sla_7d",
+    "patching": "critical_patch_sla_7d",
+}
+
+
+def normalize_control_key(control_key: str) -> str:
+    """Resolve frontend shorthand aliases to canonical registered control keys."""
+    cleaned = control_key.lower().strip()
+    return CONTROL_KEY_ALIASES.get(cleaned, cleaned)
+
+
 def _reduction_for(control_key: str) -> ds.DataPoint:
-    dp = ds.CONTROL_LIKELIHOOD_REDUCTION.get(control_key)
+    canonical_key = normalize_control_key(control_key)
+    dp = ds.CONTROL_LIKELIHOOD_REDUCTION.get(canonical_key)
     if dp is None:
         raise UnknownControlError(
             f"No effectiveness data for control '{control_key}'. Add a cited "
@@ -121,13 +142,14 @@ def applicable_controls(attack_class: str, candidate_control_keys: list[str]) ->
     """
     applicable, excluded = [], []
     for key in candidate_control_keys:
-        scope = ds.CONTROL_APPLICABLE_ATTACK_CLASSES.get(key, "*")
+        canon = normalize_control_key(key)
+        scope = ds.CONTROL_APPLICABLE_ATTACK_CLASSES.get(canon, "*")
         if scope == "*":
-            applicable.append(key)
+            applicable.append(canon)
         elif attack_class != "unclassified" and attack_class in scope:
-            applicable.append(key)
+            applicable.append(canon)
         else:
-            excluded.append(key)
+            excluded.append(canon)
     return applicable, excluded
 
 
