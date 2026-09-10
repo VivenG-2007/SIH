@@ -1273,7 +1273,7 @@ export default function RiskCommandCenter() {
       {/* ── Floating NLP Risk Co-Pilot (Powered by Groq ⚡) ── */}
       <FloatingNlpPanel
         industry={industry}
-        criticality={state?.business_context?.criticality_score ?? 0.92}
+        criticality={state?.business_service?.criticality_score ?? 0.92}
         totalEalUsd={eal || 412000}
         totalVar95Usd={var95 || 940000}
         counts={{
