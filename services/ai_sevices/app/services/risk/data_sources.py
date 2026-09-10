@@ -135,6 +135,19 @@ CONTROL_LIKELIHOOD_REDUCTION = {
         "(43 days) but not a measured causal effect of a 7-day SLA specifically",
         "n/a",
     ),
+    # Direct aliases for common UI / shorthand keys
+    "mfa": DataPoint(
+        0.992, ConfidenceTier.EMPIRICAL,
+        "Meyer et al., Microsoft Research (MFA reduction alias)", "2023-05",
+    ),
+    "fido2": DataPoint(
+        0.992, ConfidenceTier.EMPIRICAL,
+        "Meyer et al., Microsoft Research (MFA reduction alias)", "2023-05",
+    ),
+    "edr": DataPoint(
+        0.45, ConfidenceTier.ILLUSTRATIVE,
+        "Endpoint detection and response (EDR alias)", "n/a",
+    ),
 }
 
 # ---------------------------------------------------------------------------
@@ -230,7 +243,10 @@ DATA_SENSITIVITY_WEIGHT = {
 # ---------------------------------------------------------------------------
 CONTROL_APPLICABLE_ATTACK_CLASSES: dict[str, set[str] | str] = {
     "mfa_credential_attacks": {"credential_exposure", "authentication_bypass"},
+    "mfa": {"credential_exposure", "authentication_bypass"},
+    "fido2": {"credential_exposure", "authentication_bypass"},
     "edr_endpoint_detection": {"code_execution", "command_injection"},
+    "edr": {"code_execution", "command_injection"},
     "network_segmentation": {"lateral_movement", "ssrf"},
     "waf": {"injection", "sql_injection", "xss", "command_injection", "path_traversal"},
     "critical_patch_sla_7d": "*",

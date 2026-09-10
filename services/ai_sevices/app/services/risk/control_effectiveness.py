@@ -182,7 +182,7 @@ def apply_controls(
     if attack_class is not None:
         applicable_keys, excluded_keys = applicable_controls(attack_class, active_control_keys)
     else:
-        applicable_keys, excluded_keys = list(active_control_keys), []
+        applicable_keys, excluded_keys = [normalize_control_key(k) for k in active_control_keys], []
 
     residual = pre_control_likelihood
     sources = []
@@ -205,7 +205,7 @@ def apply_controls(
 
     illustrative_count = sum(
         1 for k in applicable_keys
-        if ds.CONTROL_LIKELIHOOD_REDUCTION[k].tier == ds.ConfidenceTier.ILLUSTRATIVE
+        if _reduction_for(k).tier == ds.ConfidenceTier.ILLUSTRATIVE
     )
 
     trail = EvidenceTrail(

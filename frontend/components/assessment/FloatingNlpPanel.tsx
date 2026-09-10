@@ -151,12 +151,12 @@ export default function FloatingNlpPanel({
 
   return (
     <>
-      {/* Collapsed Pill Button (Fixed on the Left) */}
+      {/* Collapsed Pill Button (Fixed on the Left Hand Bottom Side) */}
       {!isOpen && (
-        <div className="fixed left-5 bottom-8 z-40">
+        <div className="fixed left-6 bottom-6 z-50">
           <button
             onClick={() => setPanelOpen(true)}
-            className="group relative flex items-center gap-3 px-4 py-3 rounded-full bg-slate-900/90 hover:bg-slate-850 text-white border border-purple-500/40 hover:border-purple-400/70 shadow-[0_4px_25px_rgba(168,85,247,0.35)] backdrop-blur-md transition-all duration-300 hover:scale-105 active:scale-95"
+            className="group relative flex items-center gap-3 px-4 py-3 rounded-full bg-slate-950/95 hover:bg-slate-900 text-white border-2 border-purple-500/60 hover:border-purple-400 shadow-[0_8px_30px_rgba(168,85,247,0.45)] backdrop-blur-xl transition-all duration-300 hover:scale-105 active:scale-95"
             title="Open Groq NLP Risk Assistant"
           >
             <div className="relative flex items-center justify-center w-7 h-7 rounded-full bg-gradient-to-tr from-amber-500 to-orange-500 text-white shadow-md">
@@ -179,11 +179,11 @@ export default function FloatingNlpPanel({
         </div>
       )}
 
-      {/* Expanded Floating Left Panel */}
+      {/* Expanded Floating Left Hand Bottom Panel */}
       {isOpen && (
         <aside
           aria-label="Groq NLP Risk Assistant"
-          className="fixed left-5 bottom-6 z-40 w-96 max-w-[calc(100vw-2.5rem)] h-[580px] max-h-[calc(100vh-6rem)] flex flex-col rounded-2xl bg-slate-900/95 border border-purple-500/40 shadow-[0_12px_45px_rgba(0,0,0,0.6)] backdrop-blur-xl text-slate-100 overflow-hidden transition-all animate-in fade-in slide-in-from-left-4 duration-200"
+          className="fixed left-6 bottom-6 z-50 w-96 max-w-[calc(100vw-3rem)] h-[580px] max-h-[calc(100vh-4rem)] flex flex-col rounded-2xl bg-slate-950/95 border-2 border-purple-500/60 shadow-[0_16px_50px_rgba(0,0,0,0.8)] backdrop-blur-2xl text-slate-100 overflow-hidden transition-all animate-in fade-in slide-in-from-bottom-4 duration-200"
         >
           {/* Header */}
           <div className="p-3.5 bg-slate-950/80 border-b border-slate-800 flex items-center justify-between">
